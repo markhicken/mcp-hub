@@ -1,0 +1,195 @@
+# Builds MCP Hub on every push or merge to master, and publishes it to GitHub Releases.
+#
+#   Every push to master:  typecheck, test, build the macOS installers (Apple silicon and Intel), keep them as
+#                          workflow artifacts for two weeks.
+#   New version:           if the version in the repo has no GitHub Release yet, the installers are also published
+#                          as release v<version> (the tag is created for you). So a release is just: bump the
+#                          version (node scripts/version.mjs set 1.2.3), commit, merge to master.
+#                          Pushes that don't change the version build and test only, and publish nothing.
+#
+# The hub and the bridge are Node programs packaged with the Node that builds them (scripts/build-sidecars.mjs),
+# so each platform is built on its own runner. macOS is the platform MCP Hub is developed on; to add Windows or
+# Linux, add runners to the matrix below (they build with `npm run build:app` too, but haven't been tried).
+#
+# Signing is optional. Without the secrets below the macOS builds are unsigned (people open them with right-click
+# -> Open the first time). With them they are signed with a Developer ID certificate and notarized:
+#   APPLE_CERTIFICATE            base64 of the Developer ID Application .p12   (base64 -i cert.p12 | pbcopy)
+#   APPLE_CERTIFICATE_PASSWORD   the .p12 password
+#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID   notarization (an app-specific password, not your Apple ID password)
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # Fails fast, before anything slow starts: every file that carries the version must agree, and the code must pass.
+  test:
+    name: Typecheck and test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Versions agree with each other
+        run: node scripts/version.mjs check
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS (Apple silicon), slug: macos-arm64, os: macos-latest }
+          - { name: macOS (Intel), slug: macos-x64, os: macos-15-intel }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Linux packages for Tauri
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      # The signing variables are only set for the steps that need them: Tauri treats an empty APPLE_CERTIFICATE as
+      # a certificate to import and fails, so without the secrets they must not exist at all.
+      - name: Check for signing secrets
+        id: signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Import the signing certificate
+        if: runner.os == 'macOS' && steps.signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          NOTARIZE_APPLE_ID: ${{ secrets.APPLE_ID }}
+          NOTARIZE_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          NOTARIZE_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/build.keychain"
+          password="$(uuidgen)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain
+          identity="$(security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)".*/\1/')"
+          if [ -z "$identity" ]; then echo "No Developer ID Application identity found in the certificate" >&2; exit 1; fi
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          # Notarization needs all three; the certificate itself is already in the keychain, so it isn't passed on.
+          if [ -n "$NOTARIZE_APPLE_ID" ] && [ -n "$NOTARIZE_APPLE_PASSWORD" ] && [ -n "$NOTARIZE_APPLE_TEAM_ID" ]; then
+            {
+              echo "APPLE_ID=$NOTARIZE_APPLE_ID"
+              echo "APPLE_PASSWORD=$NOTARIZE_APPLE_PASSWORD"
+              echo "APPLE_TEAM_ID=$NOTARIZE_APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+          fi
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      - run: npm ci
+
+      # Builds the UI, the two sidecars (with a start-up check of each), and the app, then gathers them into dist/.
+      - run: npm run build:app
+
+      - name: Name the installers
+        shell: bash
+        run: |
+          mkdir -p installers
+          for f in dist/*.dmg dist/*.msi dist/*.exe dist/*.deb dist/*.AppImage; do
+            if [ -e "$f" ]; then cp "$f" installers/; fi
+          done
+          ls -la installers
+          [ -n "$(ls installers)" ] || { echo "The build produced no installers" >&2; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-hub-${{ matrix.slug }}
+          path: installers/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Is this version already released?
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "v$version already has a release, nothing to publish. Bump the version to release again."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.version.outputs.publish == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mcp-hub-*
+          merge-multiple: true
+          path: release
+
+      - name: Checksums and notes
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          cat > ../notes.md <<'EOF'
+          ## Installing
+
+          - **macOS:** open the `.dmg` for your Mac (`aarch64` is Apple silicon, `x64` is Intel) and drag MCP Hub to Applications.
+          - If macOS says the app can't be opened because it is from an unidentified developer, this build isn't signed yet: right-click the app and choose **Open** once.
+          - Check a download against `SHA256SUMS.txt` with `shasum -a 256 <file>`.
+          EOF
+
+      - if: steps.version.outputs.publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          files: release/*
+          body_path: notes.md
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+          fail_on_unmatched_files: true

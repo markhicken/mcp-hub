@@ -1,0 +1,11 @@
+{
+  "name": "@mcp-hub/stdio-shim",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "mcp-hub-stdio": "src/shim.mjs" },
+  "scripts": {
+    "typecheck": "node --check src/shim.mjs",
+    "test": "echo shim tests live in packages/core/test/shim.test.ts"
+  }
+}

@@ -1,0 +1,4 @@
+# Prefer dependency versions that build on the declared rust-version (1.86). Tauri's newest
+# releases need rustc 1.90+; drop this file once the toolchain is that new.
+[resolver]
+incompatible-rust-versions = "fallback"

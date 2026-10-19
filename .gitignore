@@ -1,0 +1,8 @@
+node_modules
+dist
+target
+*.log
+.DS_Store
+packages/ui/dist
+apps/desktop/src-tauri/binaries
+.playwright-mcp

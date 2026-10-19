@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>MCP Hub runs your MCP servers for you. Some of them (such as Outlook, Mail or Calendar tools) control other apps with AppleScript.</string>
+</dict>
+</plist>

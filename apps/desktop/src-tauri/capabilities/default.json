@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The main window only shows the local daemon's web UI (a remote URL), which is granted no IPC permissions. Everything privileged happens in Rust.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

@@ -1,0 +1,268 @@
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { parse, type ParseError } from "jsonc-parser";
+import { readCodexServers } from "./codex.js";
+import { pointsAtHub } from "./hub-entry.js";
+import { slugify } from "./store.js";
+import type { ServerConfig } from "./types.js";
+
+export interface ImportCandidate {
+  name: string;
+  /** Absent for entries that already go through MCP Hub: they are listed but cannot be imported. */
+  config?: ServerConfig;
+  viaHub?: boolean;
+}
+
+export interface ImportSource {
+  client: string;
+  path: string;
+  servers: ImportCandidate[];
+}
+
+export interface ClientConfigFile {
+  client: string;
+  path: string;
+  shape: "mcpServers" | "claude-code";
+  /** The object in the file that holds the servers. */
+  key: "mcpServers" | "servers" | "mcp_servers";
+  /** JSON (the default, comments allowed) or TOML (Codex). */
+  format?: "json" | "toml";
+}
+
+/** Codex's folder: `CODEX_HOME` if set, otherwise `~/.codex`. */
+export function codexHome(): string {
+  return process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+}
+
+export function candidatePaths(): ClientConfigFile[] {
+  const home = homedir();
+  const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
+  const configHome = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
+  const vscode =
+    process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Code", "User", "mcp.json")
+      : process.platform === "win32"
+        ? join(appData, "Code", "User", "mcp.json")
+        : join(configHome, "Code", "User", "mcp.json");
+  const desktop =
+    process.platform === "darwin"
+      ? join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
+      : process.platform === "win32"
+        ? join(appData, "Claude", "claude_desktop_config.json")
+        : join(configHome, "Claude", "claude_desktop_config.json");
+  return [
+    { client: "Claude Desktop", path: desktop, shape: "mcpServers", key: "mcpServers" },
+    { client: "Claude Code", path: join(home, ".claude.json"), shape: "claude-code", key: "mcpServers" },
+    // The ChatGPT desktop app, the Codex CLI and the Codex IDE extension all read this one file.
+    { client: "ChatGPT / Codex", path: join(codexHome(), "config.toml"), shape: "mcpServers", key: "mcp_servers", format: "toml" },
+    { client: "GitHub Copilot CLI", path: join(home, ".copilot", "mcp-config.json"), shape: "mcpServers", key: "mcpServers" },
+    { client: "VS Code", path: vscode, shape: "mcpServers", key: "servers" },
+    { client: "Cursor", path: join(home, ".cursor", "mcp.json"), shape: "mcpServers", key: "mcpServers" },
+    // Auggie, Augment's CLI. Its settings file holds other settings too; only "mcpServers" is touched.
+    { client: "Augment", path: join(home, ".augment", "settings.json"), shape: "mcpServers", key: "mcpServers" },
+  ];
+}
+
+type Raw = Record<string, any>;
+
+const INJECTOR = /(^|\/)inject-1password-secrets\.sh$/;
+
+/** Wrap every op:// reference in {{ }} so the hub's credential broker resolves it (quotes around a reference are dropped). */
+function wrapRefs(value: string): string {
+  if (value.includes("{{")) return value;
+  const trimmed = value.trim();
+  if (/^op:\/\//.test(trimmed) && !/['"]/.test(trimmed)) return `{{${trimmed}}}`;
+  return value.replace(/'(op:\/\/[^']+)'|"(op:\/\/[^"]+)"|(op:\/\/[^\s'",;}]+)/g, (_m, a?: string, b?: string, c?: string) => `{{${a ?? b ?? c}}}`);
+}
+
+/**
+ * The 1Password injector wrapper (`inject-1password-secrets.sh "VAR=op://…" -- command args…`, or its
+ * `http` mode with URL/HEADERS env) is replaced by what it was doing: the hub resolves references itself.
+ * Returns the entry as the hub should run it; entries that are not injector calls come back unchanged.
+ */
+export function unwrapInjector(raw: Raw): Raw {
+  if (!raw || typeof raw.command !== "string" || !INJECTOR.test(raw.command)) return raw;
+  const args: string[] = Array.isArray(raw.args) ? raw.args.map(String) : [];
+  const env: Record<string, string> = raw.env && typeof raw.env === "object" ? Object.fromEntries(Object.entries(raw.env).map(([k, v]) => [k, String(v)])) : {};
+
+  const http = args[0] === "http" || args[0] === "--http" || (!!env.URL && !args.includes("--"));
+  if (http) {
+    const { URL: url, HEADERS: headers, ...rest } = env;
+    if (!url) return raw;
+    let parsed: Record<string, string> | undefined;
+    if (headers) {
+      try {
+        const h = JSON.parse(headers) as Record<string, unknown>;
+        parsed = Object.fromEntries(Object.entries(h).map(([k, v]) => [k, wrapRefs(String(v))]));
+      } catch {
+        return raw;
+      }
+    }
+    const { command: _c, args: _a, env: _e, ...keep } = raw;
+    void _c, _a, _e;
+    return { ...keep, url: wrapRefs(url), type: "http", ...(parsed ? { headers: parsed } : {}), ...(Object.keys(rest).length ? { env: rest } : {}) };
+  }
+
+  const sep = args.indexOf("--");
+  if (sep < 0 || sep === args.length - 1) return raw;
+  for (const pair of args.slice(0, sep)) {
+    const i = pair.indexOf("=");
+    if (i > 0) env[pair.slice(0, i)] = wrapRefs(pair.slice(i + 1));
+  }
+  const [command, ...rest] = args.slice(sep + 1);
+  return { ...raw, command, args: rest, env };
+}
+
+/**
+ * Apps expand ${VAR} and ${env:VAR} themselves; the hub doesn't, so turn them into references the credential broker
+ * resolves (they need the Environment source, which says so if it is off). ${input:…} and ${workspaceFolder} are left.
+ * Names in `keep` are left alone: the program being run expands those itself from the entry's own env.
+ */
+export function refVars(value: string, keep?: ReadonlySet<string>): string {
+  return value.replace(/\$\{(env:)?([A-Za-z_][A-Za-z0-9_]*)\}/g, (all, env: string | undefined, name: string) =>
+    !env && keep?.has(name) ? all : env || /^[A-Z_][A-Z0-9_]*$/.test(name) ? `{{env://${name}}}` : all,
+  );
+}
+
+const REMOTE_BRIDGE = /^mcp-remote(@[^/\s]+)?$/;
+/** mcp-remote options that change nothing the hub does itself (it picks the transport and handles sign-in). */
+const REMOTE_HARMLESS = new Set(["--allow-http", "--debug", "--silent"]);
+
+/**
+ * `mcp-remote` makes an HTTP server look like a stdio one for apps that only run commands (Claude Desktop):
+ * `npx mcp-remote https://host/mcp --header "Authorization: Bearer ${TOKEN}"`, with TOKEN set in the entry's env.
+ * The hub talks HTTP itself, so this is turned back into the HTTP server it really is: the URL, the headers, and
+ * the values of any ${VAR} that mcp-remote would have expanded from the entry's env (references such as op://
+ * stay references). Entries using options the hub can't reproduce come back unchanged.
+ */
+export function unwrapRemoteBridge(raw: Raw): Raw {
+  if (!raw || typeof raw.command !== "string") return raw;
+  const args: string[] = Array.isArray(raw.args) ? raw.args.map(String) : [];
+  const all = [raw.command.split(/[\\/]/).pop()!, ...args];
+  const at = all.findIndex((a) => REMOTE_BRIDGE.test(a));
+  if (at < 0) return raw;
+
+  const env: Record<string, string> = raw.env && typeof raw.env === "object" ? Object.fromEntries(Object.entries(raw.env).map(([k, v]) => [k, String(v)])) : {};
+  const expand = (s: string) => s.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (m, name: string) => (name in env ? wrapRefs(env[name]!) : m));
+
+  let url: string | undefined;
+  const headers: Record<string, string> = {};
+  const rest = all.slice(at + 1);
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (a === "--header" || a.startsWith("--header=")) {
+      const v = a === "--header" ? rest[++i] : a.slice("--header=".length);
+      const colon = v?.indexOf(":") ?? -1;
+      if (!v || colon <= 0) return raw;
+      headers[v.slice(0, colon).trim()] = expand(v.slice(colon + 1).trim());
+    } else if (a === "--transport") {
+      i++; // the hub chooses the transport itself
+    } else if (REMOTE_HARMLESS.has(a) || /^\d+$/.test(a)) {
+      // an option with no effect here, or the local sign-in callback port
+    } else if (a.startsWith("-")) {
+      return raw; // --host, --resource, --static-oauth-client-info…: not something the hub can reproduce
+    } else if (!url && /^(https?:\/\/|\$\{)/.test(a)) {
+      url = expand(a);
+    } else return raw;
+  }
+  if (!url) return raw;
+  const { command: _c, args: _a, env: _e, ...keep } = raw;
+  void _c, _a, _e;
+  return { ...keep, url, type: "http", ...(Object.keys(headers).length ? { headers } : {}) };
+}
+
+const mapValues = (o: unknown): Record<string, string> | undefined =>
+  o && typeof o === "object" ? Object.fromEntries(Object.entries(o as Raw).map(([k, v]) => [k, refVars(String(v))])) : undefined;
+
+/** Convert one client-config entry into a hub server definition. Returns null if unusable. */
+export function toServerConfig(name: string, input: Raw): ServerConfig | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = unwrapRemoteBridge(unwrapInjector(input));
+  // Cline and Cursor mark a server off with `disabled: true`; keep it off rather than starting it.
+  const enabled = raw.disabled !== true && raw.enabled !== false;
+  const base = { id: slugify(name), name, enabled, lifecycle: "keep-alive" as const };
+  const url = raw.url ?? raw.serverUrl;
+  const isHttp = typeof url === "string" && (raw.type === "http" || raw.type === "sse" || raw.type === "streamable-http" || !raw.command);
+  if (isHttp) {
+    return { ...base, transport: "http", url: refVars(url), headers: mapValues(raw.headers), auth: "none" };
+  }
+  if (typeof raw.command === "string") {
+    // ${VAR} naming a variable this entry sets in its own env is expanded by the program itself, so keep it as is.
+    const own = new Set(raw.env && typeof raw.env === "object" ? Object.keys(raw.env) : []);
+    return {
+      ...base,
+      transport: "stdio",
+      command: refVars(raw.command, own),
+      args: Array.isArray(raw.args) ? raw.args.map((a: unknown) => refVars(String(a), own)) : [],
+      env: mapValues(raw.env),
+      cwd: typeof raw.cwd === "string" ? refVars(raw.cwd, own) : undefined,
+    };
+  }
+  return null;
+}
+
+export interface KnownApp {
+  client: string;
+  path: string;
+}
+
+/** The apps MCP Hub knows how to import from. Pure data: no files are touched. */
+export function knownApps(): KnownApp[] {
+  return candidatePaths().map(({ client, path }) => ({ client, path }));
+}
+
+export { pointsAtHub } from "./hub-entry.js";
+
+/** Reads other apps' config files. Pass `only` to read a single app. */
+export function scanClientConfigs(existingIds: Set<string>, only?: string): ImportSource[] {
+  const results: ImportSource[] = [];
+  for (const c of candidatePaths()) {
+    if (only && c.client !== only) continue;
+    if (!existsSync(c.path)) continue;
+    let json: Raw;
+    try {
+      const content = readFileSync(c.path, "utf-8").replace(/^\uFEFF/, "");
+      if (c.format === "toml") {
+        const read = readCodexServers(content);
+        if (read.error) continue;
+        json = { mcpServers: read.servers };
+      } else {
+        // Apps like VS Code and Cursor allow comments and trailing commas in these files.
+        const errors: ParseError[] = [];
+        const parsed = parse(content, errors, { allowTrailingComma: true });
+        if (errors.length || !parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+        json = parsed;
+      }
+    } catch {
+      continue;
+    }
+    const maps: Raw[] = [];
+    if (json.mcpServers) maps.push(json.mcpServers);
+    if (json.servers) maps.push(json.servers);
+    if (c.shape === "claude-code") for (const p of Object.values<Raw>(json.projects ?? {})) if (p?.mcpServers) maps.push(p.mcpServers);
+
+    const seen = new Set<string>();
+    const servers: ImportCandidate[] = [];
+    for (const map of maps) {
+      for (const [name, raw] of Object.entries<Raw>(map)) {
+        if (seen.has(name)) continue;
+        // Shown so it is clear they are already migrated, but never offered for import.
+        if (pointsAtHub(raw)) {
+          seen.add(name);
+          servers.push({ name, viaHub: true });
+          continue;
+        }
+        const cfg = toServerConfig(name, raw);
+        if (!cfg) continue;
+        seen.add(name);
+        // Avoid colliding with servers already in the hub.
+        let id = cfg.id;
+        for (let i = 2; existingIds.has(id); i++) id = `${cfg.id}-${i}`;
+        servers.push({ name, config: { ...cfg, id } });
+      }
+    }
+    if (servers.length) results.push({ client: c.client, path: c.path, servers });
+  }
+  return results;
+}
