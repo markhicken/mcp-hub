@@ -24,7 +24,11 @@ pub struct LaunchSpec {
     pub cwd: Option<PathBuf>,
     pub env: Vec<(String, String)>,
     pub env_remove: Vec<String>,
+    /// Called with (title, message) for each `notify` line the daemon prints, so the app can show it itself.
+    pub on_notify: Option<NotifyFn>,
 }
+
+pub type NotifyFn = Arc<dyn Fn(&str, &str) + Send + Sync>;
 
 pub enum SpawnError {
     /// Another daemon already owns the data directory (exit code 3).
@@ -184,9 +188,15 @@ impl Daemon {
         let (tx, rx) = mpsc::channel::<serde_json::Value>();
         {
             let tail = tail.clone();
+            let on_notify = spec.on_notify.clone();
             // Keeps draining after the ready line so the pipe never fills up and blocks the daemon.
             thread::spawn(move || {
                 for_each_line(stdout, |l| match serde_json::from_str::<serde_json::Value>(&l) {
+                    Ok(v) if v["event"] == "notify" => {
+                        if let (Some(f), Some(title), Some(message)) = (&on_notify, v["title"].as_str(), v["message"].as_str()) {
+                            f(title, message);
+                        }
+                    }
                     Ok(v) if v.is_object() => {
                         let _ = tx.send(v);
                     }

@@ -39,10 +39,18 @@ export function openExternal(url: string): void {
   child.unref();
 }
 
-/** Best-effort desktop notification. Never throws. */
+/**
+ * Best-effort desktop notification. Never throws.
+ *
+ * Under the desktop app (`MCP_HUB_NOTIFY=stdout`) the notification is handed to it as a JSON line and shown by the
+ * app itself, so it carries MCP Hub's icon and clicking it brings MCP Hub forward. Run on its own, the daemon can
+ * only ask the OS: `osascript` notifications are attributed to Script Editor (its icon, and a click opens it).
+ */
 export function notify(title: string, message: string): void {
   try {
-    if (process.platform === "darwin") {
+    if (process.env.MCP_HUB_NOTIFY === "stdout") {
+      process.stdout.write(JSON.stringify({ event: "notify", title, message }) + "\n");
+    } else if (process.platform === "darwin") {
       execFile(
         "osascript",
         ["-e", "on run {t, m}", "-e", "display notification m with title t", "-e", "end run", title, message],

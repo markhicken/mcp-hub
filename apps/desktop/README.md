@@ -17,6 +17,10 @@ when you quit.
   so the daemon dies with the GUI even if the GUI is killed. On quit it gets SIGTERM (Windows:
   stdin EOF), 3 s to exit, then a force kill of its process group. If the daemon dies on its own,
   a dialog offers *Restart* or *Quit*.
+- **Notifications:** the daemon doesn't ask the OS itself when it runs under the app (`MCP_HUB_NOTIFY=stdout`). It prints a
+  `{"event":"notify","title":…,"message":…}` line and the app shows it with `tauri-plugin-notification`, so the notification
+  carries MCP Hub's icon and clicking it brings the app (and its window) forward. Run on its own, the daemon falls back to
+  `osascript`, which macOS attributes to Script Editor. A `tauri dev` build is attributed to Terminal.
 - **Navigation guard:** the webview may only show `http://127.0.0.1:<daemon port>`; every other
   `http(s)` link (and `target=_blank`) opens in the system browser.
 

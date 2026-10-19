@@ -14,6 +14,7 @@ use tauri::window::Color;
 use tauri::{AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindowBuilder, Wry};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as _};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 
 const MAIN: &str = "main";
@@ -56,10 +57,14 @@ fn launch_spec(app: &AppHandle) -> Result<LaunchSpec, String> {
         return Ok(LaunchSpec {
             program: tsx,
             args: vec![root.join("packages/core/src/cli.ts").to_string_lossy().into_owned()],
-            env: vec![("MCP_HUB_UI_DIR".into(), root.join("packages/ui/dist").to_string_lossy().into_owned())],
+            env: vec![
+                ("MCP_HUB_UI_DIR".into(), root.join("packages/ui/dist").to_string_lossy().into_owned()),
+                ("MCP_HUB_NOTIFY".into(), "stdout".into()),
+            ],
             // The dev daemon locates packages/shim on its own.
             env_remove: vec!["MCP_HUB_SHIM".into()],
             cwd: Some(root),
+            on_notify: None,
         });
     }
 
@@ -81,7 +86,11 @@ fn launch_spec(app: &AppHandle) -> Result<LaunchSpec, String> {
         .map_err(|e| format!("cannot locate bundled resources: {e}"))?
         .join("ui");
 
-    let mut env = vec![("MCP_HUB_UI_DIR".to_string(), ui.to_string_lossy().into_owned())];
+    // The daemon hands its notifications to this app, which shows them as MCP Hub (its icon; a click brings it forward).
+    let mut env = vec![
+        ("MCP_HUB_UI_DIR".to_string(), ui.to_string_lossy().into_owned()),
+        ("MCP_HUB_NOTIFY".to_string(), "stdout".to_string()),
+    ];
     let shim = exe("mcp-hub-stdio");
     let mut env_remove = Vec::new();
     if shim.exists() {
@@ -89,7 +98,7 @@ fn launch_spec(app: &AppHandle) -> Result<LaunchSpec, String> {
     } else {
         env_remove.push("MCP_HUB_SHIM".to_string());
     }
-    Ok(LaunchSpec { program: core, args: vec![], cwd: None, env, env_remove })
+    Ok(LaunchSpec { program: core, args: vec![], cwd: None, env, env_remove, on_notify: None })
 }
 
 /// Starts the daemon (retrying on request), shows the window and supervises the process.
@@ -100,7 +109,14 @@ fn boot(app: AppHandle) {
             return;
         }
         set_status(&app, "Starting…");
-        let result = launch_spec(&app).map_err(SpawnError::Failed).and_then(|spec| Daemon::spawn(&spec, READY_TIMEOUT));
+        let result = launch_spec(&app)
+            .map_err(SpawnError::Failed)
+            .map(|mut spec| {
+                let handle = app.clone();
+                spec.on_notify = Some(Arc::new(move |title, message| notify(&handle, title, message)));
+                spec
+            })
+            .and_then(|spec| Daemon::spawn(&spec, READY_TIMEOUT));
         match result {
             Ok(d) => return on_started(&app, d),
             Err(SpawnError::AlreadyRunning(port)) => {
@@ -273,6 +289,11 @@ fn inform(app: &AppHandle, title: &str, message: &str) {
     app.dialog().message(message).title(title).kind(MessageDialogKind::Info).blocking_show();
 }
 
+/// A system notification from MCP Hub itself. Best effort: a notification that can't be shown is not an error.
+fn notify(app: &AppHandle, title: &str, message: &str) {
+    let _ = app.notification().builder().title(title).body(message).show();
+}
+
 // ---------------------------------------------------------------------------------------------
 // Tray, status polling and menu actions
 
@@ -408,6 +429,7 @@ pub fn run(context: tauri::Context) {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .on_window_event(|window, event| {
             // Closing only hides: the daemon keeps running until "Quit".
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
