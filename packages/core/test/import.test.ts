@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { knownApps, pointsAtHub, toServerConfig } from "../src/import.js";
+import { knownApps, parseEnvFile, pointsAtHub, toServerConfig, unwrapOpRun } from "../src/import.js";
 import { MOCK, startHub, waitFor } from "./helpers.js";
 
 describe("import", () => {
@@ -25,6 +25,43 @@ describe("import", () => {
     })!;
     expect(cfg).toMatchObject({ transport: "stdio", command: "npx", args: ["-y", "@acme/wiki-mcp", "--flag"] });
     expect(cfg.env).toEqual({ KEEP: "1", ACME_WIKI_ACCESS_TOKEN: "{{op://Private/Acme Wiki/token}}", PLAIN: "yes" });
+  });
+
+  it("turns `op run --env-file` into the program plus the file's variables as references", () => {
+    const files: Record<string, string> = {
+      "/work/.env-dev": '# dev\nAPI_KEY=op://Private/Firewalla/key\nexport MODE="dev mode"\nPLAIN=yes # note\nMSG=\'op://V/I/f\'\n',
+      "/work/more.env": "MODE=prod\n",
+    };
+    const read = (p: string) => files[p] ?? null;
+    const entry = {
+      command: "op",
+      args: ["run", "--no-masking", "--env-file=/work/.env-dev", "--env-file", "/work/more.env", "--", "/usr/bin/node", "/x/npm-cli.js", "run", "dev"],
+      env: { KEEP: "1", PLAIN: "from-app" },
+    };
+    const out = unwrapOpRun(entry, read);
+    expect(out).toMatchObject({ command: "/usr/bin/node", args: ["/x/npm-cli.js", "run", "dev"] });
+    // Later files and the file win over the entry's own env, and references become hub references.
+    expect(out.env).toEqual({ KEEP: "1", PLAIN: "yes", API_KEY: "{{op://Private/Firewalla/key}}", MODE: "prod", MSG: "{{op://V/I/f}}" });
+    expect(toServerConfig("Firewalla", out)).toMatchObject({ transport: "stdio", command: "/usr/bin/node" });
+    // Relative files resolve against the entry's cwd; without one the entry is left alone.
+    expect(unwrapOpRun({ command: "op", args: ["run", "--env-file=.env-dev", "--", "node", "a.js"], cwd: "/work" }, read).command).toBe("node");
+    expect(unwrapOpRun({ command: "op", args: ["run", "--env-file=.env-dev", "--", "node", "a.js"] }, read).command).toBe("op");
+  });
+
+  it("leaves `op run` entries it can't reproduce exactly as they were", () => {
+    const read = (p: string) => (p === "/ok.env" ? "A=1\n" : p === "/multi.env" ? 'A="one\ntwo"\n' : null);
+    for (const args of [
+      ["run", "--env-file=/missing.env", "--", "node"],
+      ["run", "--env-file=/multi.env", "--", "node"],
+      ["run", "--environment", "abc", "--", "node"],
+      ["run", "--env-file=/ok.env"],
+      ["run", "--", "node"],
+      ["read", "op://a/b/c"],
+    ]) {
+      const entry = { command: "op", args };
+      expect(unwrapOpRun(entry, read)).toBe(entry);
+    }
+    expect(parseEnvFile("not a pair")).toBeNull();
   });
 
   it("turns the injector's http mode into a remote server with header references", () => {

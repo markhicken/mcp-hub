@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { parse, type ParseError } from "jsonc-parser";
 import { readCodexServers } from "./codex.js";
 import { pointsAtHub } from "./hub-entry.js";
@@ -109,6 +109,92 @@ export function unwrapInjector(raw: Raw): Raw {
   for (const pair of args.slice(0, sep)) {
     const i = pair.indexOf("=");
     if (i > 0) env[pair.slice(0, i)] = wrapRefs(pair.slice(i + 1));
+  }
+  const [command, ...rest] = args.slice(sep + 1);
+  return { ...raw, command, args: rest, env };
+}
+
+/** Reads a dotenv file for `unwrapOpRun`; null when it can't be read. */
+const readEnvFile = (path: string): string | null => {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * KEY=VALUE lines the way `op run` reads them: blank lines and # comments skipped, an optional `export`, values
+ * optionally quoted, and no variable expansion. Returns null for anything it can't read faithfully (a quoted
+ * value that runs over several lines, or a line that isn't KEY=VALUE).
+ */
+export function parseEnvFile(text: string): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  for (const line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+    const m = /^(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/.exec(t);
+    if (!m) return null;
+    let value = m[2]!;
+    const q = value[0];
+    if (q === '"' || q === "'") {
+      const end = value.indexOf(q, 1);
+      if (end < 0) return null;
+      value = value.slice(1, end);
+    } else {
+      value = value.replace(/\s+#.*$/, "").trim();
+    }
+    out[m[1]!] = value;
+  }
+  return out;
+}
+
+/** op run options that change nothing about which environment the program gets. */
+const OP_RUN_HARMLESS = new Set(["--no-masking", "--account"]);
+
+/**
+ * `op run --env-file=app.env -- command args…` starts a program with the env file's variables set, `op://`
+ * references resolved by 1Password. The hub does that itself, so this is replaced by what it was doing: the
+ * program, and the file's variables as the server's env, with each `op://` reference turned into a hub reference
+ * (plain values are kept as written, as they were). Several --env-file options are applied in order, later files
+ * winning, and the file's values win over the entry's own env, as with `op run`.
+ *
+ * The env file is read here, only because the app's entry names it. If it can't be read or understood, or `op run`
+ * is used some way the hub can't reproduce (--environment, a relative file with no cwd to resolve it against),
+ * the entry comes back unchanged and still works as it did.
+ */
+export function unwrapOpRun(raw: Raw, read: (path: string) => string | null = readEnvFile): Raw {
+  if (!raw || typeof raw.command !== "string" || raw.command.split(/[\\/]/).pop() !== "op") return raw;
+  const args: string[] = Array.isArray(raw.args) ? raw.args.map(String) : [];
+  if (args[0] !== "run") return raw;
+  const sep = args.indexOf("--");
+  if (sep < 0 || sep === args.length - 1) return raw;
+
+  const files: string[] = [];
+  const opts = args.slice(1, sep);
+  for (let i = 0; i < opts.length; i++) {
+    const a = opts[i]!;
+    if (a === "--env-file" || a.startsWith("--env-file=")) {
+      const f = a === "--env-file" ? opts[++i] : a.slice("--env-file=".length);
+      if (!f) return raw;
+      files.push(f);
+    } else if (a === "--account") {
+      i++; // which 1Password account: the hub's own 1Password source decides that
+    } else if (!OP_RUN_HARMLESS.has(a)) {
+      return raw; // --environment, --no-masking variants…: not something the hub can reproduce
+    }
+  }
+  if (!files.length) return raw;
+
+  const env: Record<string, string> = raw.env && typeof raw.env === "object" ? Object.fromEntries(Object.entries(raw.env).map(([k, v]) => [k, String(v)])) : {};
+  for (const file of files) {
+    const path = file.startsWith("~/") ? join(homedir(), file.slice(2)) : file;
+    const absolute = isAbsolute(path) ? path : typeof raw.cwd === "string" && isAbsolute(raw.cwd) ? join(raw.cwd, path) : null;
+    if (!absolute) return raw;
+    const text = read(absolute);
+    const vars = text === null ? null : parseEnvFile(text);
+    if (!vars) return raw;
+    for (const [k, v] of Object.entries(vars)) env[k] = wrapRefs(v);
   }
   const [command, ...rest] = args.slice(sep + 1);
   return { ...raw, command, args: rest, env };
@@ -253,7 +339,7 @@ export function scanClientConfigs(existingIds: Set<string>, only?: string): Impo
           servers.push({ name, viaHub: true });
           continue;
         }
-        const cfg = toServerConfig(name, raw);
+        const cfg = toServerConfig(name, unwrapOpRun(raw));
         if (!cfg) continue;
         seen.add(name);
         // Avoid colliding with servers already in the hub.
