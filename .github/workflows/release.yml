@@ -6,6 +6,8 @@
 #                          as release v<version> (the tag is created for you). So a release is just: bump the
 #                          version (node scripts/version.mjs set 1.2.3), commit, merge to master.
 #                          Pushes that don't change the version build and test only, and publish nothing.
+#   Skipped entirely:      pushes that only touch docs (*.md), screenshots, tests or dev-only scripts (see
+#                          paths-ignore below). Note a push mixing those with app changes still runs.
 #
 # The hub and the bridge are Node programs packaged with the Node that builds them (scripts/build-sidecars.mjs),
 # so each platform is built on its own runner. macOS is the platform MCP Hub is developed on; to add Windows or
@@ -21,6 +23,18 @@ name: Release
 on:
   push:
     branches: [master]
+    # Only changes to the app (or to how it's built and versioned) run the workflow. Docs, screenshots, tests,
+    # dev-only scripts and agent instructions can't change what ships, so they neither build nor release.
+    paths-ignore:
+      - "**/*.md"
+      - "screenshots/**"
+      - "packages/core/test/**"
+      - "packages/ui/src/**/*.test.ts"
+      - "packages/core/scripts/demo-traffic.mjs"
+      - "scripts/dev.mjs"
+      - "scripts/gen-desktop-icons.py"
+      - ".gitignore"
+      - "apps/desktop/.gitignore"
 
 concurrency:
   group: release
@@ -119,8 +133,30 @@ jobs:
 
       - run: npm ci
 
+      # Spotlight indexing a freshly mounted installer image is what usually makes `hdiutil` fail to eject it
+      # ("Resource busy") while the .dmg is being made, so turn it off for this job.
+      - name: Keep Spotlight off the installer images
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off || true
+
       # Builds the UI, the two sidecars (with a start-up check of each), and the app, then gathers them into dist/.
-      - run: npm run build:app
+      # Making the .dmg still fails on the odd run ("couldn't eject disk"), so a failed build detaches any
+      # leftover image and is tried again, up to three times. Anything else that fails fails all three.
+      - name: Build the app
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npm run build:app; then exit 0; fi
+            echo "::warning::Build attempt $attempt failed"
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              # Only images made while bundling (the DMG staging images live under bundle/dmg).
+              for disk in $(hdiutil info | awk '/^=+$/ {p=""} /^image-path/ {p=$0} /^\/dev\/disk[0-9]+[ \t]/ && p ~ /bundle\/dmg/ {print $1}'); do
+                hdiutil detach -force "$disk" 2>/dev/null || true
+              done
+            fi
+            sleep 10
+          done
+          exit 1
 
       - name: Name the installers
         shell: bash

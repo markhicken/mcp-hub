@@ -1,5 +1,7 @@
 # MCP Hub desktop (Tauri v2)
 
+> **Status:** only the macOS app is built and tested. The Windows and Linux notes below describe the intended setup but are not finished or verified, and no Windows or Linux installers are published.
+
 A tray / menu-bar app that owns the MCP Hub daemon. It spawns the daemon on launch, shows the
 web UI (`packages/ui`, served by the daemon on `127.0.0.1`) in a window, and stops the daemon
 when you quit.
@@ -100,4 +102,4 @@ Unsigned builds work locally; distribution needs signing.
 - Notifications (`tauri-plugin-notification`) for "service stopped" / "secrets forgotten".
 - Universal macOS build (`--target universal-apple-darwin`) needs both arch sidecars; extend
   `build-sidecars.mjs` to build per target.
-- CI matrix for macOS / Windows / Linux releases.
+- CI matrix for macOS / Windows / Linux releases (Windows and Linux support is not finished yet).
