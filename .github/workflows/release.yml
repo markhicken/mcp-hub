@@ -133,8 +133,30 @@ jobs:
 
       - run: npm ci
 
+      # Spotlight indexing a freshly mounted installer image is what usually makes `hdiutil` fail to eject it
+      # ("Resource busy") while the .dmg is being made, so turn it off for this job.
+      - name: Keep Spotlight off the installer images
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off || true
+
       # Builds the UI, the two sidecars (with a start-up check of each), and the app, then gathers them into dist/.
-      - run: npm run build:app
+      # Making the .dmg still fails on the odd run ("couldn't eject disk"), so a failed build detaches any
+      # leftover image and is tried again, up to three times. Anything else that fails fails all three.
+      - name: Build the app
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npm run build:app; then exit 0; fi
+            echo "::warning::Build attempt $attempt failed"
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              # Only images made while bundling (the DMG staging images live under bundle/dmg).
+              for disk in $(hdiutil info | awk '/^=+$/ {p=""} /^image-path/ {p=$0} /^\/dev\/disk[0-9]+[ \t]/ && p ~ /bundle\/dmg/ {print $1}'); do
+                hdiutil detach -force "$disk" 2>/dev/null || true
+              done
+            fi
+            sleep 10
+          done
+          exit 1
 
       - name: Name the installers
         shell: bash
