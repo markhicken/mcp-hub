@@ -247,6 +247,29 @@ describe("installing into files", () => {
     expect(installServers(["docs"], "Cursor", BRIDGE, [{ ...f, path: join(dir, "app", "none.json") }]).servers[0]!.status).toBe("no-file");
   });
 
+  it("shows a known app's config file in the file manager, and only by app name", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mcp-hub-home-"));
+    mkdirSync(join(home, ".cursor"));
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    const revealed: string[] = [];
+    const t = await startHub({}, { reveal: (p: string) => revealed.push(p) });
+    try {
+      expect((await t.api("POST", "/api/apps/reveal", { client: "Cursor" })).status).toBe(404); // no file yet
+      writeFileSync(join(home, ".cursor", "mcp.json"), "{}");
+      expect((await t.api("POST", "/api/apps/reveal", { client: "Cursor" })).status).toBe(200);
+      expect(revealed).toEqual([join(home, ".cursor", "mcp.json")]);
+      // A path in the request is never used.
+      expect((await t.api("POST", "/api/apps/reveal", { client: "/etc/passwd" })).status).toBe(400);
+      expect((await t.api("POST", "/api/apps/reveal", { path: "/etc/passwd" })).status).toBe(400);
+      expect((await t.api("POST", "/api/clients/nope/reveal")).status).toBe(404);
+      expect(revealed).toHaveLength(1);
+    } finally {
+      process.env.HOME = saved;
+      await t.stop();
+    }
+  });
+
   it("is exposed over the API and refuses unknown apps", async () => {
     const home = mkdtempSync(join(tmpdir(), "mcp-hub-home-"));
     mkdirSync(join(home, ".cursor"));

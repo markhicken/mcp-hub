@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Copy, X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { api } from "./api";
 
 export const cx = (...parts: Array<string | false | null | undefined>): string => parts.filter(Boolean).join(" ");
 
@@ -323,6 +324,27 @@ export function EmptyState({ icon, title, body, children }: { icon: ReactNode; t
       <p className="mt-1.5 text-sm text-muted">{body}</p>
       {children && <div className="mt-5 flex flex-wrap justify-center gap-2">{children}</div>}
     </div>
+  );
+}
+
+/**
+ * A file path that opens in Finder (or the OS file manager) when clicked. The hub looks the file up itself from the
+ * app's name or id, so no path is ever sent back to it.
+ */
+export function PathLink({ path, app, running, className }: { path: string; app?: string; running?: string; className?: string }) {
+  const toast = useToast();
+  const open = async () => {
+    try {
+      if (running) await api("POST", `/api/clients/${encodeURIComponent(running)}/reveal`);
+      else await api("POST", "/api/apps/reveal", { client: app });
+    } catch (e) {
+      toast((e as Error).message, "error");
+    }
+  };
+  return (
+    <button type="button" onClick={open} title={`Show in Finder: ${path}`} className={cx("block max-w-full cursor-pointer truncate text-left hover:text-accent hover:underline", className)}>
+      {path}
+    </button>
   );
 }
 

@@ -5,7 +5,7 @@ import { RecoveryKeyPanel } from "./Encryption";
 import { InstallInAppDialog } from "./Install";
 import type { ImportApp, ImportSource, ServerConfig, Snapshot } from "./types";
 import { MigrateDialog } from "./Migrate";
-import { Button, Dialog, useToast } from "./ui";
+import { Button, Dialog, PathLink, useToast } from "./ui";
 
 /**
  * Brings in servers configured in other apps. Nothing is read from another app until the user
@@ -97,7 +97,7 @@ export function ImportPanel({ snap, onDone }: { snap: Snapshot; onDone?: () => v
               <div className="flex items-center gap-3 px-3 py-2.5">
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-semibold">{app.client}</div>
-                  <div className="truncate font-mono text-[11px] text-muted" title={app.path}>{app.path}</div>
+                  <PathLink app={app.client} path={app.path} className="font-mono text-[11px] text-muted" />
                 </div>
                 {src !== undefined && snap.servers.length > 0 && <Button size="sm" onClick={() => setInstalling(app.client)}><PackagePlus className="size-3.5" /> Install…</Button>}
                 {src && src.servers.some((x) => x.config && !x.viaHub) && <Button size="sm" variant="primary" onClick={() => setMigrating(src)}><Replace className="size-3.5" /> Migrate to MCP Hub…</Button>}

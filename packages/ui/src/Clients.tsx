@@ -3,7 +3,7 @@ import { useState } from "react";
 import { api } from "./api";
 import { timeAgo } from "./lib";
 import type { ClientInfo, ServerStatus } from "./types";
-import { Button, Dialog, cx, useToast } from "./ui";
+import { Button, Dialog, PathLink, cx, useToast } from "./ui";
 
 const DOT = { good: "bg-good", warn: "bg-warn", bad: "bg-bad" } as const;
 const StatusDot = ({ tone }: { tone: keyof typeof DOT }) => <span className={cx("size-2 shrink-0 rounded-full", DOT[tone])} />;
@@ -107,9 +107,10 @@ export function ClientList({ clients, servers }: { clients: ClientInfo[]; server
           <StatusDot tone={c.status === "allowed" ? "good" : c.status === "pending" ? "warn" : "bad"} />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-medium">{c.name}</div>
-            <div className="truncate text-xs text-muted" title={c.path}>
+            <div className="truncate text-xs text-muted">
               {c.status === "allowed" ? (c.allowed ? `Allowed: ${c.allowed.filter((id) => servers.some((s) => s.id === id)).length} of ${servers.length} servers` : "Allowed: every server") : c.status === "pending" ? "Waiting for your answer" : "Denied"} · {c.servers.length} requested · active {timeAgo(c.lastSeen)}
             </div>
+            <PathLink running={c.id} path={c.path} className="font-mono text-[11px] text-muted" />
           </div>
           {c.status === "allowed" && <Button size="sm" onClick={() => setEditing(c.id)}>Choose servers…</Button>}
           {c.status !== "allowed" && <Button size="sm" variant="primary" onClick={() => setEditing(c.id)}>Allow…</Button>}

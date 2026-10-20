@@ -13,7 +13,7 @@ import { run as runCommand } from "./credentials/exec.js";
 import { installOnePasswordCli, type InstalledCli } from "./credentials/op-installer.js";
 import { detectSetup } from "./credentials/setup.js";
 import { installVaultCli } from "./credentials/vault-installer.js";
-import { knownApps, scanClientConfigs } from "./import.js";
+import { candidatePaths, knownApps, scanClientConfigs } from "./import.js";
 import { buildExport, parseImport, planImport, type ClashChoice } from "./config-transfer.js";
 import { installServer, installServers, migrateClientConfig, previewInstall, previewInstallServers } from "./install.js";
 import { HubManager, HttpError } from "./manager.js";
@@ -908,6 +908,24 @@ export class Hub {
     if (m === "POST" && p === "/api/config/export/reveal") {
       if (!this.lastExportPath) throw new HttpError(404, "Nothing has been exported yet");
       (this.opts.reveal ?? revealInFileManager)(this.lastExportPath);
+      return json(res, 200, { ok: true });
+    }
+    // Shows one of the known apps' config files in the file manager. The path is looked up here from the app's
+    // name; one given in the request is never used.
+    if (m === "POST" && p === "/api/apps/reveal") {
+      const body = (await readJson(req)) as { client?: unknown };
+      const file = typeof body?.client === "string" ? candidatePaths().find((f) => f.client === body.client) : undefined;
+      if (!file) throw new HttpError(400, "client must be a known app");
+      if (!existsSync(file.path)) throw new HttpError(404, `${file.client} has no config file yet`);
+      (this.opts.reveal ?? revealInFileManager)(file.path);
+      return json(res, 200, { ok: true });
+    }
+    // Shows a connected app (the program that is running) in the file manager.
+    if (m === "POST" && (r = /^\/api\/clients\/([^/]+)\/reveal$/.exec(p))) {
+      const found = this.clients.list().find((c) => c.id === decodeURIComponent(r![1]!));
+      if (!found) throw new HttpError(404, "That app is no longer connected");
+      if (!existsSync(found.path)) throw new HttpError(404, "That app can't be found any more");
+      (this.opts.reveal ?? revealInFileManager)(found.path);
       return json(res, 200, { ok: true });
     }
     if (m === "POST" && p === "/api/config/import") {

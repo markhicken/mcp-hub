@@ -2,7 +2,7 @@ import { AlertTriangle, Check, Replace } from "lucide-react";
 import { useState } from "react";
 import { api } from "./api";
 import type { ImportSource, MigrateResponse, Snapshot } from "./types";
-import { Button, Dialog, cx, useToast } from "./ui";
+import { Button, Dialog, PathLink, cx, useToast } from "./ui";
 
 const MODE: Record<string, string> = { added: "Added to MCP Hub", replaced: "Replaced in MCP Hub", reused: "Using the copy already in MCP Hub" };
 
@@ -62,7 +62,7 @@ export function MigrateDialog({ source, snap, preselected, onClose, onDone }: { 
             <div className="min-w-0">
               <div className="font-medium">{source.client}</div>
               <p className="mt-0.5 text-xs text-muted">{result.config.message}</p>
-              <p className="mt-1 truncate font-mono text-[11px] text-muted" title={result.config.path}>{result.config.path}</p>
+              <PathLink app={source.client} path={result.config.path} className="mt-1 font-mono text-[11px] text-muted" />
             </div>
           </div>
           <ul className="divide-y divide-border rounded-xl border border-border">

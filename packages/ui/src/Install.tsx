@@ -2,7 +2,7 @@ import { AlertTriangle, Check, CircleSlash, Minus, PackagePlus } from "lucide-re
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { AppInstallPreview, AppInstallResult, ImportApp, InstallPreview as Preview, InstallResult as Result, ServerStatus, Snapshot } from "./types";
-import { Button, Dialog, cx, useToast } from "./ui";
+import { Button, Dialog, PathLink, cx, useToast } from "./ui";
 
 
 const LOOK: Record<Result["status"], { icon: typeof Check; tone: string; label: string }> = {
@@ -103,7 +103,7 @@ export function InstallDialog({ server, onClose }: { server: ServerStatus; onClo
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium">{r.client} <span className={cx("ml-1 text-xs font-normal", look.tone)}>{look.label}</span></div>
                   <p className="mt-0.5 text-xs text-muted">{r.message}</p>
-                  <p className="mt-0.5 truncate font-mono text-[11px] text-muted" title={r.path}>{r.path}</p>
+                  <PathLink app={r.client} path={r.path} className="mt-0.5 font-mono text-[11px] text-muted" />
                   {r.backup && <p className="mt-1 break-all text-[11px] text-muted">Backup of the original: <span className="font-mono">{r.backup}</span></p>}
                 </div>
               </li>
@@ -122,7 +122,7 @@ export function InstallDialog({ server, onClose }: { server: ServerStatus; onClo
             {review.map((p) => (
               <li key={p.client} className="px-3 py-3">
                 <div className="text-sm font-medium">{p.client} <span className={cx("ml-1 text-xs font-normal", p.status === "replace" || p.status === "conflict" ? "text-warn" : p.status === "error" ? "text-bad" : "text-muted")}>{PLAN[p.status]}</span></div>
-                <p className="mt-0.5 truncate font-mono text-[11px] text-muted" title={p.path}>{p.path}</p>
+                <PathLink app={p.client} path={p.path} className="mt-0.5 font-mono text-[11px] text-muted" />
                 {p.status === "replace" ? (
                   <ul className="mt-1.5 space-y-1">
                     {p.existing.map((e) => (
@@ -145,7 +145,7 @@ export function InstallDialog({ server, onClose }: { server: ServerStatus; onClo
                   <input type="checkbox" checked={picked.has(a.client)} onChange={(e) => setPicked((p) => { const n = new Set(p); e.target.checked ? n.add(a.client) : n.delete(a.client); return n; })} />
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-medium">{a.client}</span>
-                    <span className="block truncate font-mono text-[11px] text-muted" title={a.path}>{a.path}</span>
+                    <PathLink app={a.client} path={a.path} className="font-mono text-[11px] text-muted" />
                   </span>
                 </label>
               </li>
@@ -240,7 +240,7 @@ export function InstallInAppDialog({ client, snap, onClose, onDone }: { client: 
               );
             })}
           </ul>
-          <p className="truncate font-mono text-[11px] text-muted" title={result.path}>{result.path}</p>
+          <PathLink app={result.client} path={result.path} className="font-mono text-[11px] text-muted" />
           {result.backup && <p className="break-all text-[11px] text-muted">Backup of the original: <span className="font-mono">{result.backup}</span></p>}
         </div>
       ) : review ? (
@@ -267,7 +267,7 @@ export function InstallInAppDialog({ client, snap, onClose, onDone }: { client: 
               </li>
             ))}
           </ul>
-          <p className="truncate font-mono text-[11px] text-muted" title={review.path}>{review.path}</p>
+          <PathLink app={review.client} path={review.path} className="font-mono text-[11px] text-muted" />
         </div>
       ) : snap.servers.length === 0 ? (
         <p className="text-sm text-muted">There are no servers in MCP Hub yet. Add or import one first.</p>
