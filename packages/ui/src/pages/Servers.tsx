@@ -176,7 +176,13 @@ function ServerCard(props: {
         {s.state === "needs-auth" && <Button size="sm" variant="primary" onClick={props.onSignIn}><LogIn className="size-3.5" /> Sign in</Button>}
         {s.state === "error" && <Button size="sm" onClick={props.onRestart}><RefreshCw className="size-3.5" /> Retry</Button>}
       </div>
-      {st.detail && <p className="line-clamp-2 rounded-lg bg-bad/8 px-2.5 py-1.5 text-xs text-bad">{st.detail}</p>}
+      {st.detail && (
+        // The padding lives on this wrapper: line-clamp on an element that has its own padding lets the clipped lines show in it.
+        <div className="rounded-lg bg-bad/8 px-2.5 py-1.5 text-xs text-bad">
+          <p className="line-clamp-3 break-words" title={st.detail}>{st.detail}</p>
+          {st.detail.length > 140 && <button onClick={props.onOpen} className="mt-1 cursor-pointer font-medium underline underline-offset-2">Show full error</button>}
+        </div>
+      )}
 
       <dl className="mt-auto grid grid-cols-3 gap-2 border-t border-border pt-3 text-xs">
         <Stat icon={<Plug className="size-3" />} label="Tools" value={s.toolCount != null ? String(s.toolCount) : "–"} />
@@ -261,7 +267,12 @@ function Overview({ s, onEdit, onConnectClient, onInstall, onSignIn }: { s: Serv
   ];
   return (
     <div className="space-y-5 p-5">
-      {s.error && <p className="rounded-lg bg-bad/10 p-3 text-sm text-bad">{s.error}</p>}
+      {s.error && (
+        <div className="space-y-2 rounded-lg bg-bad/10 p-3 text-sm text-bad">
+          <p className="max-h-64 select-text overflow-auto whitespace-pre-wrap break-words">{s.error}</p>
+          <CopyButton text={s.error} label="Copy error" />
+        </div>
+      )}
       <dl className="divide-y divide-border rounded-xl border border-border">
         {rows.map(([k, v]) => (
           <div key={k} className="flex justify-between gap-4 px-4 py-2.5 text-sm"><dt className="text-muted">{k}</dt><dd className="truncate text-right font-medium">{v}</dd></div>
