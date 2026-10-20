@@ -45,7 +45,7 @@ export function ClientApproval({ client, servers, onLater, onClose }: { client: 
   return (
     <Dialog
       title={asking ? `Allow ${client.name} to use MCP Hub?` : `What can ${client.name} use?`}
-      subtitle={client.path}
+      subtitle={<PathLink running={client.id} path={client.path} />}
       onClose={leave}
       footer={
         <>

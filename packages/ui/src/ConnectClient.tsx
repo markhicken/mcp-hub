@@ -1,9 +1,11 @@
-import { Check } from "lucide-react";
-import { useState } from "react";
-import { CodeBlock, Dialog, Segmented } from "./ui";
+import { Check, PackagePlus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { api } from "./api";
+import { InstallDialog } from "./Install";
+import { Button, CodeBlock, Dialog, PathLink, Segmented } from "./ui";
 import type { ServerStatus, Snapshot } from "./types";
 
-type Client = "claude-desktop" | "claude-code" | "copilot" | "cursor" | "augment" | "codex" | "other";
+type Client = "claude-desktop" | "claude-code" | "copilot" | "cursor" | "vscode" | "augment" | "codex" | "other";
 
 const clientOptions: Array<{ value: Client; label: string }> = [
   { value: "claude-desktop", label: "Claude Desktop" },
@@ -11,9 +13,21 @@ const clientOptions: Array<{ value: Client; label: string }> = [
   { value: "codex", label: "ChatGPT / Codex" },
   { value: "copilot", label: "Copilot CLI" },
   { value: "cursor", label: "Cursor" },
+  { value: "vscode", label: "VS Code" },
   { value: "augment", label: "Augment" },
   { value: "other", label: "Other" },
 ];
+
+/** The app's name as Install knows it; "other" has no config file to edit. */
+const INSTALL_NAME: Partial<Record<Client, string>> = {
+  "claude-desktop": "Claude Desktop",
+  "claude-code": "Claude Code",
+  codex: "ChatGPT / Codex",
+  copilot: "GitHub Copilot CLI",
+  cursor: "Cursor",
+  vscode: "VS Code",
+  augment: "Augment",
+};
 
 const sh = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `"${s.replace(/(["\\$`])/g, "\\$1")}"`);
 
@@ -46,7 +60,7 @@ export function snippetsFor(client: Client, s: ServerStatus, snap: Snapshot): { 
 
   switch (client) {
     case "claude-desktop":
-      return { intro: `Paste this inside "mcpServers" in claude_desktop_config.json, then restart Claude Desktop. ${approval}`, blocks: [{ label: "Entry for mcpServers", code: json() }, ...direct] };
+      return { intro: `Paste this inside "mcpServers" in the app's config file, then restart Claude Desktop. ${approval}`, blocks: [{ label: "Entry for mcpServers", code: json() }, ...direct] };
     case "claude-code":
       return {
         intro: `Run this once in a terminal, or paste the entry inside "mcpServers" in your project's .mcp.json. ${approval}`,
@@ -57,17 +71,19 @@ export function snippetsFor(client: Client, s: ServerStatus, snap: Snapshot): { 
         ],
       };
     case "copilot":
-      return { intro: `Paste this inside "mcpServers" in ~/.copilot/mcp-config.json. ${approval}`, blocks: [{ label: "Entry for mcpServers", code: json({ type: "local", tools: ["*"] }) }, ...direct] };
+      return { intro: `Paste this inside "mcpServers" in the app's config file. ${approval}`, blocks: [{ label: "Entry for mcpServers", code: json({ type: "local", tools: ["*"] }) }, ...direct] };
     case "cursor":
-      return { intro: `Paste this inside "mcpServers" in ~/.cursor/mcp.json. ${approval}`, blocks: [{ label: "Entry for mcpServers", code: json() }, ...direct] };
+      return { intro: `Paste this inside "mcpServers" in the app's config file. ${approval}`, blocks: [{ label: "Entry for mcpServers", code: json() }, ...direct] };
+    case "vscode":
+      return { intro: `Paste this inside "servers" in the app's config file (or Command Palette → MCP: Open User Configuration). ${approval}`, blocks: [{ label: "Entry for servers", code: json({ type: "stdio" }) }, ...direct] };
     case "augment":
-      return { intro: `Paste this inside "mcpServers" in ~/.augment/settings.json (Auggie CLI), then restart Auggie. ${approval}`, blocks: [{ label: "Entry for mcpServers", code: json() }, ...direct] };
+      return { intro: `Paste this inside "mcpServers" in the app's config file (Auggie CLI), then restart Auggie. ${approval}`, blocks: [{ label: "Entry for mcpServers", code: json() }, ...direct] };
     case "codex":
       return {
-        intro: `The ChatGPT desktop app, the Codex CLI and the Codex IDE extension all read ~/.codex/config.toml, so one entry covers them. Run this once in a terminal, or paste the table into that file. ${approval}`,
+        intro: `The ChatGPT desktop app, the Codex CLI and the Codex IDE extension all read the same config file, so one entry covers them. Run this once in a terminal, or paste the table into that file. ${approval}`,
         blocks: [
           { label: "Terminal", code: `codex mcp add ${s.id} -- ${[command, ...args].map(sh).join(" ")}` },
-          { label: "Table for ~/.codex/config.toml", code: `[mcp_servers.${s.id}]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}` },
+          { label: "Table for the Codex config file", code: `[mcp_servers.${s.id}]\ncommand = ${JSON.stringify(command)}\nargs = ${JSON.stringify(args)}` },
           ...direct,
         ],
       };
@@ -81,12 +97,34 @@ export function snippetsFor(client: Client, s: ServerStatus, snap: Snapshot): { 
 
 export function ConnectClientDialog({ server, snap, onClose }: { server: ServerStatus; snap: Snapshot; onClose: () => void }) {
   const [client, setClient] = useState<Client>("claude-desktop");
+  const [installing, setInstalling] = useState<string | null>(null);
+  const [paths, setPaths] = useState<Record<string, string>>({});
+  useEffect(() => {
+    api<{ apps: Array<{ client: string; path: string }> }>("GET", "/api/import/apps").then((r) => setPaths(Object.fromEntries(r.apps.map((a) => [a.client, a.path]))), () => {});
+  }, []);
   const { intro, blocks } = snippetsFor(client, server, snap);
+  const installName = INSTALL_NAME[client];
+  const configPath = installName ? paths[installName] : undefined;
   return (
+    <>
     <Dialog title={`Connect a client to ${server.config.name}`} subtitle="Point your AI app at the hub instead of the server itself." onClose={onClose} wide>
       <div className="space-y-4">
         <Segmented value={client} onChange={setClient} options={clientOptions} />
-        <p className="text-sm text-muted">{intro}</p>
+        {installName && configPath && (
+          <div className="min-w-0 text-xs text-muted">
+            Config file: <PathLink app={installName} path={configPath} className="inline-block align-bottom font-mono" />
+          </div>
+        )}
+        {installName && snap.shim && (
+          <section className="flex flex-wrap items-center gap-3 rounded-xl border border-border p-4">
+            <div className="min-w-0 flex-1">
+              <h3 className="text-sm font-semibold">Install it for me</h3>
+              <p className="mt-0.5 text-xs text-muted">Adds the entry to {installName}'s config file. You'll review it first, and the file is backed up before anything changes.</p>
+            </div>
+            <Button variant="primary" onClick={() => setInstalling(installName)}><PackagePlus className="size-4" /> Preview &amp; install…</Button>
+          </section>
+        )}
+        <p className="text-sm text-muted">{installName && snap.shim ? <><strong className="font-semibold text-fg">Or do it yourself.</strong> </> : null}{intro}</p>
         {blocks.map((b) => (
           <div key={b.label} className="space-y-1.5">
             <div className="text-xs font-semibold text-muted">{b.label}</div>
@@ -99,5 +137,7 @@ export function ConnectClientDialog({ server, snap, onClose }: { server: ServerS
         </p>
       </div>
     </Dialog>
+    {installing && <InstallDialog key={installing} server={server} client={installing} onClose={() => setInstalling(null)} />}
+    </>
   );
 }

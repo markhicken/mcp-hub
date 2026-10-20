@@ -1,9 +1,8 @@
-import { Activity, ArrowDownUp, Cable, Download, Globe, LogIn, MoreHorizontal, PackagePlus, Plug, Plus, RefreshCw, Search, StickyNote, Terminal, X } from "lucide-react";
+import { Activity, ArrowDownUp, Cable, Download, Globe, LogIn, MoreHorizontal, Plug, Plus, RefreshCw, Search, StickyNote, Terminal, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AddServerDialog } from "../AddServer";
 import { api, onLog } from "../api";
 import { ConnectClientDialog } from "../ConnectClient";
-import { InstallDialog } from "../Install";
 import { colorFor, formatBytes, formatDuration, formatNumber, timeAgo } from "../lib";
 import { StatusBadge, deriveStatus } from "../status";
 import type { LogLine, ServerStatus, Snapshot } from "../types";
@@ -21,7 +20,6 @@ export function ServersPage({ snap, onImport, focus }: Props) {
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ServerStatus | null>(null);
   const [connecting, setConnecting] = useState<ServerStatus | null>(null);
-  const [installing, setInstalling] = useState<ServerStatus | null>(null);
   const [selected, setSelected] = useState<string | null>(focus?.id ?? null);
   const [removing, setRemoving] = useState<ServerStatus | null>(null);
 
@@ -84,7 +82,6 @@ export function ServersPage({ snap, onImport, focus }: Props) {
               onSignIn={() => act(() => api("POST", `/api/servers/${s.id}/signin`), "Opening your browser…")}
               onRestart={() => act(() => api("POST", `/api/servers/${s.id}/restart`), "Restarting")}
               onConnectClient={() => setConnecting(s)}
-              onInstall={() => setInstalling(s)}
               onEdit={() => setEditing(s)}
               onRemove={() => setRemoving(s)}
             />
@@ -95,7 +92,6 @@ export function ServersPage({ snap, onImport, focus }: Props) {
       {adding && <AddServerDialog onClose={() => setAdding(false)} />}
       {editing && <AddServerDialog existing={editing} onClose={() => setEditing(null)} />}
       {connecting && <ConnectClientDialog server={connecting} snap={snap} onClose={() => setConnecting(null)} />}
-      {installing && <InstallDialog server={installing} onClose={() => setInstalling(null)} />}
       {removing && (
         <Confirm
           title={`Remove ${removing.config.name}?`}
@@ -112,7 +108,6 @@ export function ServersPage({ snap, onImport, focus }: Props) {
           onClose={() => setSelected(null)}
           onEdit={() => setEditing(selectedServer)}
           onConnectClient={() => setConnecting(selectedServer)}
-          onInstall={() => setInstalling(selectedServer)}
           onSignIn={() => act(() => api("POST", `/api/servers/${selectedServer.id}/signin`), "Opening your browser…")}
         />
       )}
@@ -130,7 +125,6 @@ function ServerCard(props: {
   onSignIn: () => void;
   onRestart: () => void;
   onConnectClient: () => void;
-  onInstall: () => void;
   onEdit: () => void;
   onRemove: () => void;
 }) {
@@ -199,7 +193,6 @@ function ServerCard(props: {
           <div role="menu" className="fade-in absolute right-0 z-10 mt-1 w-48 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl">
             {[
               ["Open details", props.onOpen],
-              ["Install in an app…", props.onInstall],
               ["Connect a client…", props.onConnectClient],
               ["Edit", props.onEdit],
               ["Restart", props.onRestart],
@@ -231,7 +224,7 @@ function Stat({ icon, label, value }: { icon: React.ReactNode; label: string; va
 
 type Tab = "overview" | "logs" | "tools";
 
-function ServerDrawer({ server: s, snap, onClose, onEdit, onConnectClient, onInstall, onSignIn }: { server: ServerStatus; snap: Snapshot; onClose: () => void; onEdit: () => void; onConnectClient: () => void; onInstall: () => void; onSignIn: () => void }) {
+function ServerDrawer({ server: s, snap, onClose, onEdit, onConnectClient, onSignIn }: { server: ServerStatus; snap: Snapshot; onClose: () => void; onEdit: () => void; onConnectClient: () => void; onSignIn: () => void }) {
   const [tab, setTab] = useState<Tab>("overview");
   const st = deriveStatus(s, snap);
   return (
@@ -247,7 +240,7 @@ function ServerDrawer({ server: s, snap, onClose, onEdit, onConnectClient, onIns
         <Segmented value={tab} onChange={setTab} options={[{ value: "overview", label: "Overview" }, { value: "logs", label: "Logs" }, { value: "tools", label: "Tools" }]} />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {tab === "overview" && <Overview s={s} onEdit={onEdit} onConnectClient={onConnectClient} onInstall={onInstall} onSignIn={onSignIn} />}
+        {tab === "overview" && <Overview s={s} onEdit={onEdit} onConnectClient={onConnectClient} onSignIn={onSignIn} />}
         {tab === "logs" && <Logs serverId={s.id} />}
         {tab === "tools" && <Tools server={s} />}
       </div>
@@ -255,7 +248,7 @@ function ServerDrawer({ server: s, snap, onClose, onEdit, onConnectClient, onIns
   );
 }
 
-function Overview({ s, onEdit, onConnectClient, onInstall, onSignIn }: { s: ServerStatus; onEdit: () => void; onConnectClient: () => void; onInstall: () => void; onSignIn: () => void }) {
+function Overview({ s, onEdit, onConnectClient, onSignIn }: { s: ServerStatus; onEdit: () => void; onConnectClient: () => void; onSignIn: () => void }) {
   const rows: Array<[string, string]> = [
     ["Server", s.serverInfo?.name ? `${s.serverInfo.name} ${s.serverInfo.version ?? ""}` : "–"],
     ["Protocol", s.protocolVersion ?? "–"],
@@ -278,9 +271,14 @@ function Overview({ s, onEdit, onConnectClient, onInstall, onSignIn }: { s: Serv
           <div key={k} className="flex justify-between gap-4 px-4 py-2.5 text-sm"><dt className="text-muted">{k}</dt><dd className="truncate text-right font-medium">{v}</dd></div>
         ))}
       </dl>
+      {s.config.notes?.trim() && (
+        <section className="space-y-1.5">
+          <h3 className="flex items-center gap-1.5 text-xs font-medium text-muted"><StickyNote className="size-3.5" /> Notes</h3>
+          <p className="max-h-64 select-text overflow-auto whitespace-pre-wrap break-words text-sm">{s.config.notes}</p>
+        </section>
+      )}
       <div className="flex flex-wrap gap-2">
-        <Button variant="primary" onClick={onInstall}><PackagePlus className="size-4" /> Install in an app</Button>
-        <Button onClick={onConnectClient}><Cable className="size-4" /> Connect a client</Button>
+        <Button variant="primary" onClick={onConnectClient}><Cable className="size-4" /> Connect a client</Button>
         <Button onClick={onEdit}>Edit</Button>
         {s.state === "needs-auth" && <Button onClick={onSignIn}><LogIn className="size-4" /> Sign in</Button>}
         {s.config.auth === "oauth" && s.state === "connected" && <Button onClick={() => api("POST", `/api/servers/${s.id}/signout`)}>Sign out</Button>}

@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { extname, join, normalize, resolve, sep } from "node:path";
+import { basename, dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { ClientGate, type GateOptions } from "./clients.js";
 import { ChildRegistry } from "./children.js";
 import { childrenPath } from "./paths.js";
@@ -910,14 +910,33 @@ export class Hub {
       (this.opts.reveal ?? revealInFileManager)(this.lastExportPath);
       return json(res, 200, { ok: true });
     }
-    // Shows one of the known apps' config files in the file manager. The path is looked up here from the app's
-    // name; one given in the request is never used.
+    // Shows one of the known apps' config files, or a backup made of it, in the file manager. The path is looked up
+    // here from the app's name; one given in the request is never used as it is, and a backup must be a
+    // `<config file>.mcp-hub-backup-…` copy sitting next to that app's config file.
     if (m === "POST" && p === "/api/apps/reveal") {
-      const body = (await readJson(req)) as { client?: unknown };
+      const body = (await readJson(req)) as { client?: unknown; backup?: unknown };
       const file = typeof body?.client === "string" ? candidatePaths().find((f) => f.client === body.client) : undefined;
       if (!file) throw new HttpError(400, "client must be a known app");
-      if (!existsSync(file.path)) throw new HttpError(404, `${file.client} has no config file yet`);
-      (this.opts.reveal ?? revealInFileManager)(file.path);
+      let target = file.path;
+      if (body.backup !== undefined) {
+        if (typeof body.backup !== "string") throw new HttpError(400, "backup must be a path");
+        const real = (path: string): string | null => {
+          try {
+            return realpathSync(path);
+          } catch {
+            return null;
+          }
+        };
+        const config = real(file.path);
+        const backup = real(body.backup);
+        if (!config || !backup || dirname(backup) !== dirname(config) || !basename(backup).startsWith(`${basename(config)}.mcp-hub-backup-`)) {
+          throw new HttpError(404, "That backup can't be found");
+        }
+        target = backup;
+      } else if (!existsSync(file.path)) {
+        throw new HttpError(404, `${file.client} has no config file yet`);
+      }
+      (this.opts.reveal ?? revealInFileManager)(target);
       return json(res, 200, { ok: true });
     }
     // Shows a connected app (the program that is running) in the file manager.

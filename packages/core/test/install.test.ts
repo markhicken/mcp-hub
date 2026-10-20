@@ -259,11 +259,21 @@ describe("installing into files", () => {
       writeFileSync(join(home, ".cursor", "mcp.json"), "{}");
       expect((await t.api("POST", "/api/apps/reveal", { client: "Cursor" })).status).toBe(200);
       expect(revealed).toEqual([join(home, ".cursor", "mcp.json")]);
+      // A backup can be shown only if it is a backup copy sitting next to that app's config file.
+      const backup = join(home, ".cursor", "mcp.json.mcp-hub-backup-2026-01-01-0001");
+      writeFileSync(backup, "{}");
+      writeFileSync(join(home, ".cursor", "other.txt"), "x");
+      expect((await t.api("POST", "/api/apps/reveal", { client: "Cursor", backup })).status).toBe(200);
+      expect(revealed.at(-1)).toBe(realpathSync(backup));
+      for (const bad of [join(home, ".cursor", "other.txt"), "/etc/passwd", join(home, ".cursor", "mcp.json.mcp-hub-backup-missing")]) {
+        expect((await t.api("POST", "/api/apps/reveal", { client: "Cursor", backup: bad })).status).toBe(404);
+      }
+      expect(revealed).toHaveLength(2);
       // A path in the request is never used.
       expect((await t.api("POST", "/api/apps/reveal", { client: "/etc/passwd" })).status).toBe(400);
       expect((await t.api("POST", "/api/apps/reveal", { path: "/etc/passwd" })).status).toBe(400);
       expect((await t.api("POST", "/api/clients/nope/reveal")).status).toBe(404);
-      expect(revealed).toHaveLength(1);
+      expect(revealed).toHaveLength(2);
     } finally {
       process.env.HOME = saved;
       await t.stop();

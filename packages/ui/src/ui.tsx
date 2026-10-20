@@ -185,7 +185,7 @@ function useFocusTrap(ref: React.RefObject<HTMLElement | null>) {
   }, [ref]);
 }
 
-export function Dialog({ title, subtitle, onClose, children, footer, wide }: { title: string; subtitle?: string; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
+export function Dialog({ title, subtitle, onClose, children, footer, wide }: { title: string; subtitle?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; wide?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   useEscape(onClose);
   useFocusTrap(ref);
@@ -196,7 +196,7 @@ export function Dialog({ title, subtitle, onClose, children, footer, wide }: { t
         <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-4">
           <div>
             <h2 className="text-base font-semibold">{title}</h2>
-            {subtitle && <p className="mt-0.5 text-sm text-muted">{subtitle}</p>}
+            {subtitle && <div className="mt-0.5 text-sm text-muted">{subtitle}</div>}
           </div>
           <button aria-label="Close" onClick={onClose} className="rounded-md p-1 text-muted hover:bg-surface-2 hover:text-fg cursor-pointer">
             <X className="size-4" />
@@ -328,21 +328,25 @@ export function EmptyState({ icon, title, body, children }: { icon: ReactNode; t
 }
 
 /**
- * A file path that opens in Finder (or the OS file manager) when clicked. The hub looks the file up itself from the
- * app's name or id, so no path is ever sent back to it.
+ * A file path that opens in Finder (or the OS file manager) when clicked. Every path the UI shows should be one of
+ * these. The hub looks the file up itself, so no arbitrary path is ever sent back to it: say what the path belongs to.
+ *   app      an app's config file (by the app's name), or with `backup`, a backup copy of it
+ *   running  a connected app's program (by its id)
+ *   exported the configuration file that was just exported
  */
-export function PathLink({ path, app, running, className }: { path: string; app?: string; running?: string; className?: string }) {
+export function PathLink({ path, app, backup, running, exported, wrap, className }: { path: string; app?: string; backup?: boolean; running?: string; exported?: boolean; /** Break a long path over lines instead of cutting it off. */ wrap?: boolean; className?: string }) {
   const toast = useToast();
   const open = async () => {
     try {
-      if (running) await api("POST", `/api/clients/${encodeURIComponent(running)}/reveal`);
-      else await api("POST", "/api/apps/reveal", { client: app });
+      if (exported) await api("POST", "/api/config/export/reveal");
+      else if (running) await api("POST", `/api/clients/${encodeURIComponent(running)}/reveal`);
+      else await api("POST", "/api/apps/reveal", { client: app, ...(backup ? { backup: path } : {}) });
     } catch (e) {
       toast((e as Error).message, "error");
     }
   };
   return (
-    <button type="button" onClick={open} title={`Show in Finder: ${path}`} className={cx("block max-w-full cursor-pointer truncate text-left hover:text-accent hover:underline", className)}>
+    <button type="button" onClick={open} title={`Show in Finder: ${path}`} className={cx("max-w-full cursor-pointer text-left hover:text-accent hover:underline", wrap ? "break-all" : "block truncate", className)}>
       {path}
     </button>
   );

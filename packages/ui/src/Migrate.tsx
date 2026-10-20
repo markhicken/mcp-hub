@@ -88,7 +88,7 @@ export function MigrateDialog({ source, snap, preselected, onClose, onDone }: { 
           )}
           {result.config.backup && (
             <p className="text-xs text-muted">
-              The original file was copied to <span className="break-all font-mono">{result.config.backup}</span> first. To undo, copy it back over the config file.
+              The original file was copied to <PathLink app={source.client} backup wrap path={result.config.backup} className="font-mono" /> first. To undo, copy it back over the config file.
             </p>
           )}
           {ok && <p className="text-xs text-muted">Restart {source.client} so it picks up the change. MCP Hub has to be running for these servers to work in it.</p>}
@@ -122,7 +122,7 @@ export function MigrateDialog({ source, snap, preselected, onClose, onDone }: { 
           <div className="space-y-1.5 text-xs text-muted">
             <p>MCP Hub will:</p>
             <ol className="list-decimal space-y-1 pl-5">
-              <li>Back up <span className="font-mono">{source.path}</span> next to the original (the copy is named <span className="font-mono">…mcp-hub-backup-&lt;time&gt;</span>).</li>
+              <li>Back up <PathLink app={source.client} wrap path={source.path} className="font-mono" /> next to the original (the copy is named <span className="font-mono">…mcp-hub-backup-&lt;time&gt;</span>).</li>
               <li>Add the selected servers to MCP Hub, with secrets like <span className="font-mono">op://…</span> kept as references.</li>
               <li>Change each selected entry in that file so it runs through MCP Hub. The entry keeps its name, so tool names don't change. Everything else in the file stays as it is.</li>
             </ol>

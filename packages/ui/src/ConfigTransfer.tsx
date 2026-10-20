@@ -1,7 +1,7 @@
 import { AlertTriangle, Download, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
-import { Button, Chip, Dialog, Textarea, cx, useToast } from "./ui";
+import { Button, Chip, Dialog, PathLink, Textarea, cx, useToast } from "./ui";
 
 interface ExportDoc {
   servers: Array<{ name: string }>;
@@ -99,7 +99,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
         {savedTo && (
           <div className="rounded-xl border border-good/40 bg-good/10 p-3">
             <div className="font-medium text-good">Saved</div>
-            <code className="mt-1 block break-all font-mono text-xs" data-testid="saved-path">{savedTo}</code>
+            <span data-testid="saved-path"><PathLink exported wrap path={savedTo} className="mt-1 font-mono text-xs" /></span>
             <p className="mt-2 text-xs text-muted">Only you can read the file. Keep it somewhere private: it names your servers and the credentials they use.</p>
           </div>
         )}
