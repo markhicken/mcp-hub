@@ -869,9 +869,16 @@ export class Hub {
 
     // ---- apps connected through the local socket
     if (m === "POST" && (r = /^\/api\/clients\/([^/]+)\/decision$/.exec(p))) {
-      const body = (await readJson(req)) as { allow?: unknown };
+      const body = (await readJson(req)) as { allow?: unknown; servers?: unknown };
       if (typeof body?.allow !== "boolean") throw new HttpError(400, "allow must be a boolean");
-      if (!this.clients.decide(decodeURIComponent(r[1]!), body.allow)) throw new HttpError(404, "That app is no longer connected");
+      // `servers` limits what the app may use. Choosing every server that exists means "all", future ones included.
+      let servers: string[] | null = null;
+      if (body.servers !== undefined) {
+        if (!Array.isArray(body.servers) || body.servers.some((s) => typeof s !== "string" || !manager.get(s))) throw new HttpError(400, "servers must list existing servers");
+        const every = store.servers.every((s) => (body.servers as string[]).includes(s.id));
+        servers = every ? null : (body.servers as string[]);
+      }
+      if (!this.clients.decide(decodeURIComponent(r[1]!), body.allow, servers)) throw new HttpError(404, "That app is no longer connected");
       return json(res, 200, { ok: true });
     }
 

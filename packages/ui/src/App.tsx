@@ -128,7 +128,7 @@ export function App() {
         </main>
       </div>
       {snap && importing && <ImportDialog snap={snap} onClose={() => setImporting(false)} />}
-      {snap && askAbout && !showWelcome && <ClientApproval client={askAbout} onLater={() => setLater((s) => new Set(s).add(askAbout.id))} />}
+      {snap && askAbout && !showWelcome && <ClientApproval client={askAbout} servers={snap.servers} onLater={() => setLater((s) => new Set(s).add(askAbout.id))} />}
       {snap && showWelcome && (
         <Welcome
           snap={snap}

@@ -52,7 +52,7 @@ export function SettingsPage({ snap, theme, setTheme, onIntro }: Props) {
       </Section>
 
       <Section title="Apps using MCP Hub">
-        <ClientList clients={snap.clients} />
+        <ClientList clients={snap.clients} servers={snap.servers} />
       </Section>
 
       <Section title="Security">

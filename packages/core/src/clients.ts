@@ -11,7 +11,10 @@ export interface ClientInfo {
   since: number;
   lastSeen: number;
   requests: number;
+  /** Servers the app has asked for. */
   servers: string[];
+  /** Servers it may use: null means every one, including servers added later. */
+  allowed: string[] | null;
 }
 
 export interface ProcInfo {
@@ -105,6 +108,8 @@ export interface GateOptions {
 
 export type Verdict = { status: "allowed" | "denied" | "pending"; client?: ClientInfo; reason?: string };
 
+const copy = (c: ClientInfo): ClientInfo => ({ ...c, servers: [...c.servers], allowed: c.allowed ? [...c.allowed] : null });
+
 const pidAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0);
@@ -139,7 +144,7 @@ export class ClientGate extends EventEmitter {
   }
 
   list(): ClientInfo[] {
-    return [...this.clients.values()].map((c) => ({ ...c, servers: [...c.servers] }));
+    return [...this.clients.values()].map(copy);
   }
 
   private identify(pid: number): Promise<string | null> {
@@ -152,7 +157,7 @@ export class ClientGate extends EventEmitter {
           if (!r) return null;
           if (!this.clients.has(r.key)) {
             const now = Date.now();
-            const info: ClientInfo = { id: r.key, name: r.name, pid: r.pid, path: r.path, status: "pending", since: now, lastSeen: now, requests: 0, servers: [] };
+            const info: ClientInfo = { id: r.key, name: r.name, pid: r.pid, path: r.path, status: "pending", since: now, lastSeen: now, requests: 0, servers: [], allowed: null };
             this.clients.set(r.key, info);
             this.emit("pending", { ...info });
             this.emit("change");
@@ -184,13 +189,18 @@ export class ClientGate extends EventEmitter {
         setTimeout(resolve, this.opts.waitMs ?? 50_000).unref();
       });
     }
-    return { status: c.status, client: { ...c, servers: [...c.servers] } };
+    if (c.status === "allowed" && c.allowed && !c.allowed.includes(serverId)) {
+      return { status: "denied", client: copy(c), reason: `${c.name} wasn't given access to this server. Change what it can use in MCP Hub → Settings.` };
+    }
+    return { status: c.status, client: copy(c) };
   }
 
-  decide(id: string, allow: boolean): boolean {
+  /** `servers` limits what an allowed app may use; leave it out (or null) to allow every server. */
+  decide(id: string, allow: boolean, servers: string[] | null = null): boolean {
     const c = this.clients.get(id);
     if (!c) return false;
     c.status = allow ? "allowed" : "denied";
+    c.allowed = allow && servers ? [...new Set(servers)] : null;
     for (const w of this.waiters.get(id) ?? []) w();
     this.waiters.delete(id);
     this.emit("change");

@@ -80,6 +80,27 @@ describe("approval gate", () => {
     g.close();
   });
 
+  it("lets an allowed app use only the servers it was given", async () => {
+    const g = mk();
+    const first = g.authorize(51, "a");
+    await waitFor(() => g.list().length === 1);
+    const id = g.list()[0]!.id;
+    expect(g.list()[0]!.allowed).toBeNull();
+    g.decide(id, true, ["a", "b"]);
+    expect((await first).status).toBe("allowed");
+    expect((await g.authorize(52, "b")).status).toBe("allowed");
+    const blocked = await g.authorize(53, "c");
+    expect(blocked).toMatchObject({ status: "denied", reason: expect.stringContaining("wasn't given access") });
+    // Changing the choice applies at once; allowing without a list means every server again.
+    g.decide(id, true, ["c"]);
+    expect((await g.authorize(54, "c")).status).toBe("allowed");
+    expect((await g.authorize(55, "a")).status).toBe("denied");
+    g.decide(id, true);
+    expect(g.list()[0]!.allowed).toBeNull();
+    expect((await g.authorize(56, "a")).status).toBe("allowed");
+    g.close();
+  });
+
   it("forgets an app when it quits, so the next launch asks again", async () => {
     let alive = true;
     const g = mk({ alive: () => alive, sweepMs: 20 });

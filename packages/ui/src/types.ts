@@ -94,7 +94,10 @@ export interface ClientInfo {
   since: number;
   lastSeen: number;
   requests: number;
+  /** Servers the app has asked for. */
   servers: string[];
+  /** Servers it may use; null means every one, including servers added later. */
+  allowed: string[] | null;
 }
 
 export interface ImportApp {
