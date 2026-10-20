@@ -1,6 +1,6 @@
 {
   "name": "@mcp-hub/desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Tauri v2 tray/menu-bar shell for MCP Hub.",
   "scripts": {

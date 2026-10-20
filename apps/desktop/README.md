@@ -87,7 +87,11 @@ CSP would additionally protect and the UI keeps full control of its own policy.
 
 ## Signing and notarization
 
-Unsigned builds work locally; distribution needs signing.
+Without a certificate, macOS builds are ad-hoc signed (`bundle.macOS.signingIdentity` is `"-"`): Apple
+silicon refuses an app whose bundle isn't sealed, reporting it as "damaged". An ad-hoc build still
+isn't trusted, so a downloaded copy needs **Open Anyway** in System Settings → Privacy & Security
+(or `xattr -cr "/Applications/MCP Hub.app"`). `APPLE_SIGNING_IDENTITY` overrides the ad-hoc identity.
+Distribution without that step needs a Developer ID certificate and notarization.
 
 - **macOS:** a Developer ID Application certificate and notarization. Set
   `APPLE_SIGNING_IDENTITY`, and either `APPLE_ID` + `APPLE_PASSWORD` (app-specific) +

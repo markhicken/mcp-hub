@@ -215,7 +215,7 @@ jobs:
           ## Installing
 
           - **macOS:** open the `.dmg` for your Mac (`aarch64` is Apple silicon, `x64` is Intel) and drag MCP Hub to Applications.
-          - If macOS says the app can't be opened because it is from an unidentified developer, this build isn't signed yet: right-click the app and choose **Open** once.
+          - If macOS says the app can't be opened because it is from an unidentified developer, this build isn't notarized yet: open **System Settings → Privacy & Security** and choose **Open Anyway** (on older macOS, right-click the app and choose **Open**). If it says the app is "damaged", run `xattr -cr "/Applications/MCP Hub.app"` and open it again.
           - Check a download against `SHA256SUMS.txt` with `shasum -a 256 <file>`.
           EOF
 
