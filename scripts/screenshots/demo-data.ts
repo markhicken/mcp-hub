@@ -25,17 +25,16 @@ interface DemoServer {
 
 // Labels are an addition for the screenshots (the old ones had none). In card order. The first eight are the cards visible in the existing Servers screenshot (name, transport, shown
 // command or URL, status, tool count and notes icon are read from it; the hidden tail of each truncated command is
-// a guess). Glean and Pipeliner only appear in the Usage legend, so everything about them except the name is a guess.
+// a guess). Pipeliner only appears in the Usage legend, so everything about them except the name is a guess.
 export const SERVERS: DemoServer[] = [
   { id: "outlook-desktop", labels: ["Work"], name: "Outlook Desktop", transport: "stdio", command: "/Users/me/.local/bin/uv", args: ["--directory", "/Users/me/Work/Repositories/outlook-desktop-mcp", "run", "outlook-desktop-mcp"], tools: 27 },
-  { id: "wiki", labels: ["Work"], name: "Wiki", transport: "stdio", command: "node", args: ["/Users/me/Work/Repositories/adobe-mcp-wiki/dist/index.js"], tools: 9 },
+  { id: "wiki", labels: ["Work"], name: "Wiki", transport: "stdio", command: "node", args: ["/Users/me/Work/Repositories/mcp-wiki/dist/index.js"], tools: 9 },
   { id: "docs-master-15", labels: ["Work"], name: "Docs Master", transport: "http", url: "https://api.docsmaster.null/api/v1/mcp", notes: "Internal docs search. Needs the VPN.", tools: 40, idle: true },
   { id: "github-3", labels: ["Personal"], name: "GitHub", transport: "stdio", command: "/Users/me/Work/Repositories/github-mcp-server/github-mcp-server", args: ["stdio"], tools: 51 },
-  { id: "jira", labels: ["Work"], name: "Jira", transport: "stdio", command: "node", args: ["/Users/me/Work/Repositories/adobe-mcp-jira/dist/index.js"], tools: 30 },
+  { id: "jira", labels: ["Work"], name: "Jira", transport: "stdio", command: "node", args: ["/Users/me/Work/Repositories/mcp-jira/dist/index.js"], tools: 30 },
   { id: "playwright", labels: ["Personal"], name: "Playwright", transport: "stdio", command: "npx", args: ["@playwright/mcp@latest"], tools: 25 },
   { id: "chrome-devtools", labels: ["Personal"], name: "Chrome DevTools", transport: "stdio", command: "npx", args: ["chrome-devtools-mcp@latest"], tools: 32 },
   { id: "snuffy-18", labels: ["Personal"], name: "Snuffy", transport: "http", url: "https://snuffy.io.null/mcp", notes: "Sandbox account.", tools: 4 },
-  { id: "glean", labels: ["Work"], name: "Glean", transport: "http", url: "https://acme-be.glean.null/mcp/default", tools: 12 },
   { id: "pipeliner-6", labels: ["Work"], name: "Pipeliner", transport: "stdio", command: "npx", args: ["@pipeliner/mcp@latest"], tools: 18 },
 ];
 
@@ -120,7 +119,6 @@ const REQUESTS: Array<[string, [number, number, number]]> = [
   ["jira", [1, 0, 1]],
   ["wiki", [2, 0, 2]],
   ["chrome-devtools", [1, 0, 1]],
-  ["glean", [1, 0, 1]],
   ["outlook-desktop", [3, 0, 3]],
   ["playwright", [1, 3, 1]],
   ["pipeliner-6", [1, 0, 1]],
