@@ -32,6 +32,7 @@ on:
       - "packages/ui/src/**/*.test.ts"
       - "packages/core/scripts/demo-traffic.mjs"
       - "scripts/dev.mjs"
+      - "scripts/screenshots/**"
       - "scripts/gen-desktop-icons.py"
       - ".gitignore"
       - "apps/desktop/.gitignore"

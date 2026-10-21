@@ -15,7 +15,8 @@
     "dev:core": "npm run dev -w @mcp-hub/core",
     "dev:ui": "npm run dev -w @mcp-hub/ui",
     "build": "npm run build -w @mcp-hub/core -w @mcp-hub/ui",
-    "typecheck": "npm run typecheck --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc --noEmit -p scripts/screenshots",
+    "screenshots": "npm run build -w @mcp-hub/ui && node scripts/screenshots/capture.ts",
     "test": "npm test --workspaces --if-present",
     "build:sidecars": "node scripts/build-sidecars.mjs",
     "build:app": "npm run build -w @mcp-hub/ui && npm run build:sidecars && node scripts/with-signing.mjs npm run build -w @mcp-hub/desktop && node scripts/collect-dist.mjs",
@@ -23,6 +24,7 @@
     "setup:signing": "node scripts/setup-signing.mjs"
   },
   "devDependencies": {
-    "concurrently": "^10.0.6"
+    "concurrently": "^10.0.6",
+    "playwright": "^1.64.1"
   }
 }

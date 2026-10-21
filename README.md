@@ -52,6 +52,10 @@ npm run build:app:debug
 
 The finished app is copied into `dist/` (git-ignored). If you rebuild often on a Mac, run `npm run setup:signing` once: it makes a local signing certificate so macOS keeps your approvals (such as 1Password access) across rebuilds instead of asking again. For release builds and signing, see [`apps/desktop/README.md`](apps/desktop/README.md).
 
+## Update the screenshots
+
+`npm run screenshots` rebuilds the UI and retakes the two screenshots in `screenshots/` from made-up data (`scripts/screenshots/demo-data.ts`, nothing from your machine), framed in a macOS window. It needs a one-time `npx playwright install chromium`. Run it before a release, then commit the images.
+
 ## Learn more
 
 Everything else lives in [`ARCHITECTURE.md`](ARCHITECTURE.md): the detailed feature reference, how the proxy and credential broker work, the security model, the API, testing, releasing and known limitations. For the desktop app and installers, see [`apps/desktop/README.md`](apps/desktop/README.md).
