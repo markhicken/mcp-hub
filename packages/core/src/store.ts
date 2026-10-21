@@ -222,6 +222,18 @@ export class ConfigStore {
     this.save();
   }
 
+  /**
+   * Put the servers in the given order. Ids that aren't servers are ignored, and servers that aren't listed (added
+   * since the caller last looked) keep their relative order after the listed ones.
+   */
+  reorderServers(ids: string[]): void {
+    const byId = new Map(this.data.servers.map((s) => [s.id, s]));
+    const first = [...new Set(ids)].filter((id) => byId.has(id));
+    const listed = new Set(first);
+    this.data.servers = [...first.map((id) => byId.get(id)!), ...this.data.servers.filter((s) => !listed.has(s.id))];
+    this.save();
+  }
+
   removeServer(id: string): boolean {
     const n = this.data.servers.length;
     this.data.servers = this.data.servers.filter((s) => s.id !== id);

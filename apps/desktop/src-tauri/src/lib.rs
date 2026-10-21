@@ -207,6 +207,9 @@ fn show_window(app: &AppHandle, url: &str, hidden: bool) -> Result<(), Box<dyn s
         .center()
         .background_color(Color(15, 17, 21, 255))
         .visible(!hidden)
+        // The page does its own drag and drop (reordering cards). Tauri's native file-drop handler would swallow
+        // those events on macOS and Windows, and nothing here takes dropped files.
+        .disable_drag_drop_handler()
         .on_navigation(move |url| allow_navigation(&nav_app, url))
         // target=_blank / window.open: never a new in-app window, only the system browser.
         .on_new_window(move |url, _features| {

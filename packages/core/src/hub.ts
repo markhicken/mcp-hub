@@ -605,6 +605,14 @@ export class Hub {
     }
 
     // ---- servers
+    // The order of the cards. Kept in the config, so it survives restarts.
+    if (m === "PUT" && p === "/api/servers/order") {
+      const body = (await readJson(req)) as { ids?: unknown } | undefined;
+      if (!Array.isArray(body?.ids) || body.ids.some((id) => typeof id !== "string")) throw new HttpError(400, "ids must be a list of server ids");
+      store.reorderServers(body.ids as string[]);
+      manager.notifyChange();
+      return json(res, 200, { ok: true });
+    }
     if (m === "POST" && p === "/api/servers") {
       const body = (await readJson(req)) as Partial<ServerConfig> | undefined;
       if (!body?.name) throw new HttpError(400, "name is required");

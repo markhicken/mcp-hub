@@ -1,4 +1,4 @@
-import { Activity, ArrowDownUp, Cable, Download, Globe, LogIn, MoreHorizontal, Plug, Plus, RefreshCw, Search, StickyNote, Terminal, X } from "lucide-react";
+import { Activity, ArrowDownUp, Cable, ChevronDown, Download, Globe, LogIn, Plug, Plus, RefreshCw, Search, StickyNote, Terminal, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AddServerDialog } from "../AddServer";
 import { api, onLog } from "../api";
@@ -22,13 +22,45 @@ export function ServersPage({ snap, onImport, focus }: Props) {
   const [connecting, setConnecting] = useState<ServerStatus | null>(null);
   const [selected, setSelected] = useState<string | null>(focus?.id ?? null);
   const [removing, setRemoving] = useState<ServerStatus | null>(null);
+  // The order shown while a reorder is being saved, so the card doesn't jump back before the hub confirms it.
+  const [localOrder, setLocalOrder] = useState<string[] | null>(null);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
 
   useEffect(() => {
     if (focus) setSelected(focus.id);
   }, [focus]);
 
-  const servers = useMemo(() => snap.servers.filter((s) => `${s.config.name} ${s.id}`.toLowerCase().includes(query.toLowerCase())), [snap.servers, query]);
+  const ordered = useMemo(() => {
+    if (!localOrder) return snap.servers;
+    const rank = (id: string) => { const i = localOrder.indexOf(id); return i < 0 ? localOrder.length : i; };
+    return [...snap.servers].sort((a, b) => rank(a.id) - rank(b.id));
+  }, [snap.servers, localOrder]);
+  useEffect(() => {
+    if (localOrder && snap.servers.length === localOrder.length && snap.servers.every((s, i) => s.id === localOrder[i])) setLocalOrder(null);
+  }, [snap.servers, localOrder]);
+
+  // Reordering a filtered list would be ambiguous, so it is only offered when every server is showing.
+  const filtering = query.trim() !== "";
+  const servers = useMemo(() => ordered.filter((s) => `${s.config.name} ${s.id}`.toLowerCase().includes(query.toLowerCase())), [ordered, query]);
   const selectedServer = snap.servers.find((s) => s.id === selected) ?? null;
+
+  /** Put `id` where `target` is (or one place earlier/later with `by`), and save the new order. */
+  const moveServer = async (id: string, to: { target: string } | { by: number }) => {
+    const ids = ordered.map((s) => s.id);
+    const from = ids.indexOf(id);
+    const dest = "target" in to ? ids.indexOf(to.target) : from + to.by;
+    if (from < 0 || dest < 0 || dest >= ids.length || dest === from) return;
+    ids.splice(from, 1);
+    ids.splice(dest, 0, id);
+    setLocalOrder(ids);
+    try {
+      await api("PUT", "/api/servers/order", { ids });
+    } catch (e) {
+      setLocalOrder(null);
+      toast((e as Error).message, "error");
+    }
+  };
 
   const act = async (fn: () => Promise<unknown>, ok?: string) => {
     try {
@@ -64,11 +96,23 @@ export function ServersPage({ snap, onImport, focus }: Props) {
         <p className="py-12 text-center text-sm text-muted">No servers match “{query}”.</p>
       ) : (
         <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(310px,1fr))]">
-          {servers.map((s) => (
+          {servers.map((s, i) => (
             <ServerCard
               key={s.id}
               server={s}
               snap={snap}
+              reorder={{
+                draggable: !filtering,
+                dragging: dragId === s.id,
+                dropTarget: !!dragId && dragId !== s.id && overId === s.id,
+                onDragStart: () => setDragId(s.id),
+                onDragEnd: () => { setDragId(null); setOverId(null); },
+                onDragOver: () => dragId && setOverId(s.id),
+                onDrop: () => { if (dragId) void moveServer(dragId, { target: s.id }); setDragId(null); setOverId(null); },
+                onMove: filtering ? undefined : (by) => void moveServer(s.id, { by }),
+                canMoveEarlier: i > 0,
+                canMoveLater: i < servers.length - 1,
+              }}
               onOpen={() => setSelected(s.id)}
               onToggle={(on) => act(() => api("POST", `/api/servers/${s.id}/${on ? "enable" : "disable"}`))}
               onSignIn={() => act(() => api("POST", `/api/servers/${s.id}/signin`), "Opening your browser…")}
@@ -112,6 +156,19 @@ export function ServersPage({ snap, onImport, focus }: Props) {
 function ServerCard(props: {
   server: ServerStatus;
   snap: Snapshot;
+  /** Drag-to-reorder state and handlers, plus the keyboard-friendly "Move earlier/later" menu items. */
+  reorder: {
+    draggable: boolean;
+    dragging: boolean;
+    dropTarget: boolean;
+    onDragStart: () => void;
+    onDragEnd: () => void;
+    onDragOver: () => void;
+    onDrop: () => void;
+    onMove?: (by: -1 | 1) => void;
+    canMoveEarlier: boolean;
+    canMoveLater: boolean;
+  };
   onOpen: () => void;
   onToggle: (on: boolean) => void;
   onSignIn: () => void;
@@ -134,12 +191,40 @@ function ServerCard(props: {
 
   const subtitle = s.config.description ?? (s.config.transport === "http" ? s.config.url : [s.config.command, ...(s.config.args ?? [])].join(" "));
   const on = s.config.enabled;
+  // Only the content is dimmed when off: dimming the whole card would make its menu see-through.
+  const dim = !on && "opacity-75";
+  // The whole card opens the details; clicks on its own controls and on selected text are left alone.
+  const openFromCard = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest("button, a, input, label, [role='menu'], [role='switch']")) return;
+    if (window.getSelection()?.toString()) return;
+    props.onOpen();
+  };
 
+  const r = props.reorder;
   return (
-    <Card className={cx("fade-in group relative p-4 transition hover:border-accent/50", menu && "z-20")}>
-      {/* Only the content is dimmed when off: dimming the whole card would make its menu see-through. */}
-      <div className={cx("flex flex-col gap-3", !on && "opacity-75")}>
-      <div className="flex items-start gap-3">
+    <Card
+      onClick={openFromCard}
+      draggable={r.draggable}
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = "move";
+        // Firefox won't start a drag without some data.
+        e.dataTransfer.setData("text/plain", s.id);
+        r.onDragStart();
+      }}
+      onDragEnd={r.onDragEnd}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        r.onDragOver();
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        r.onDrop();
+      }}
+      className={cx("fade-in group relative cursor-pointer p-4 transition hover:border-accent/50", menu && "z-20", r.dragging && "opacity-40", r.dropTarget && "border-accent ring-2 ring-accent/40")}
+    >
+      <div className="flex flex-col gap-3">
+      <div className={cx("flex items-start gap-3", dim)}>
         <span className="mt-0.5 grid size-9 shrink-0 place-items-center rounded-xl text-white" style={{ background: colorFor(s.id) }} aria-hidden>
           {s.config.transport === "http" ? <Globe className="size-4" /> : <Terminal className="size-4" />}
         </span>
@@ -158,49 +243,56 @@ function ServerCard(props: {
         <Switch checked={on} onChange={props.onToggle} label={`${on ? "Disconnect" : "Connect"} ${s.config.name}`} />
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge status={st} server={s} />
-        {(st.key === "credentials" || st.key === "connecting") && <Spinner label={st.label} />}
-        {s.state === "needs-auth" && <Button size="sm" variant="primary" onClick={props.onSignIn}><LogIn className="size-3.5" /> Sign in</Button>}
-        {s.state === "error" && <Button size="sm" onClick={props.onRestart}><RefreshCw className="size-3.5" /> Retry</Button>}
+      <div className="flex items-center gap-2">
+        <div className={cx("flex min-w-0 flex-1 flex-wrap items-center gap-2", dim)}>
+          <StatusBadge status={st} server={s} />
+          {(st.key === "credentials" || st.key === "connecting") && <Spinner label={st.label} />}
+          {s.state === "needs-auth" && <Button size="sm" variant="primary" onClick={props.onSignIn}><LogIn className="size-3.5" /> Sign in</Button>}
+          {s.state === "error" && <Button size="sm" onClick={props.onRestart}><RefreshCw className="size-3.5" /> Retry</Button>}
+        </div>
+        <div className="relative shrink-0" ref={menuRef}>
+          <Button size="sm" aria-label={`Options for ${s.config.name}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}>
+            Options <ChevronDown className={cx("size-3.5 transition-transform", menu && "rotate-180")} />
+          </Button>
+          {menu && (
+            <div role="menu" className="fade-in absolute right-0 top-full z-10 mt-1 w-48 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl">
+              {[
+                ["Open details", props.onOpen],
+                ["Connect a client…", props.onConnectClient],
+                ["Edit", props.onEdit],
+                ["Restart", props.onRestart],
+              ].map(([label, fn]) => (
+                <button key={label as string} role="menuitem" onClick={() => { setMenu(false); (fn as () => void)(); }} className="block w-full px-3 py-1.5 text-left text-sm hover:bg-surface-2 cursor-pointer">{label as string}</button>
+              ))}
+              {r.onMove && (r.canMoveEarlier || r.canMoveLater) && (
+                <div className="my-1 border-t border-border pt-1">
+                  {r.canMoveEarlier && <button role="menuitem" onClick={() => { setMenu(false); r.onMove?.(-1); }} className="block w-full px-3 py-1.5 text-left text-sm hover:bg-surface-2 cursor-pointer">Move earlier</button>}
+                  {r.canMoveLater && <button role="menuitem" onClick={() => { setMenu(false); r.onMove?.(1); }} className="block w-full px-3 py-1.5 text-left text-sm hover:bg-surface-2 cursor-pointer">Move later</button>}
+                </div>
+              )}
+              <div className="mx-2 my-1 flex items-center justify-between px-1 text-xs text-muted">
+                <span className="truncate">{s.mcpUrl}</span>
+                <CopyButton text={s.mcpUrl} label="" />
+              </div>
+              <button role="menuitem" onClick={() => { setMenu(false); props.onRemove(); }} className="block w-full px-3 py-1.5 text-left text-sm text-bad hover:bg-bad/10 cursor-pointer">Remove…</button>
+            </div>
+          )}
+        </div>
       </div>
-      {st.key === "credentials" && <p className="-mt-1 text-xs text-muted">Approve the prompt on your device so it can start.</p>}
+      {st.key === "credentials" && <p className={cx("-mt-1 text-xs text-muted", dim)}>Approve the prompt on your device so it can start.</p>}
       {st.detail && (
         // The padding lives on this wrapper: line-clamp on an element that has its own padding lets the clipped lines show in it.
-        <div className="rounded-lg bg-bad/8 px-2.5 py-1.5 text-xs text-bad">
+        <div className={cx("rounded-lg bg-bad/8 px-2.5 py-1.5 text-xs text-bad", dim)}>
           <p className="line-clamp-3 break-words" title={st.detail}>{st.detail}</p>
           {st.detail.length > 140 && <button onClick={props.onOpen} className="mt-1 cursor-pointer font-medium underline underline-offset-2">Show full error</button>}
         </div>
       )}
 
-      <dl className="mt-auto grid grid-cols-3 gap-2 border-t border-border pt-3 text-xs">
+      <dl className={cx("mt-auto grid grid-cols-3 gap-2 border-t border-border pt-3 text-xs", dim)}>
         <Stat icon={<Plug className="size-3" />} label="Tools" value={s.toolCount != null ? String(s.toolCount) : "–"} />
         <Stat icon={<ArrowDownUp className="size-3" />} label="Traffic" value={formatBytes(s.bytesIn + s.bytesOut)} />
         <Stat icon={<Activity className="size-3" />} label="Last used" value={timeAgo(s.lastActivityAt, now)} />
       </dl>
-      </div>
-
-      <div className="absolute right-3 top-12" ref={menuRef}>
-        <button aria-label={`More actions for ${s.config.name}`} aria-expanded={menu} onClick={() => setMenu((m) => !m)} className="rounded-md p-1 text-muted opacity-0 transition hover:bg-surface-2 hover:text-fg focus:opacity-100 group-hover:opacity-100 cursor-pointer">
-          <MoreHorizontal className="size-4" />
-        </button>
-        {menu && (
-          <div role="menu" className="fade-in absolute right-0 z-10 mt-1 w-48 overflow-hidden rounded-xl border border-border bg-surface py-1 shadow-2xl">
-            {[
-              ["Open details", props.onOpen],
-              ["Connect a client…", props.onConnectClient],
-              ["Edit", props.onEdit],
-              ["Restart", props.onRestart],
-            ].map(([label, fn]) => (
-              <button key={label as string} role="menuitem" onClick={() => { setMenu(false); (fn as () => void)(); }} className="block w-full px-3 py-1.5 text-left text-sm hover:bg-surface-2 cursor-pointer">{label as string}</button>
-            ))}
-            <div className="mx-2 my-1 flex items-center justify-between px-1 text-xs text-muted">
-              <span className="truncate">{s.mcpUrl}</span>
-              <CopyButton text={s.mcpUrl} label="" />
-            </div>
-            <button role="menuitem" onClick={() => { setMenu(false); props.onRemove(); }} className="block w-full px-3 py-1.5 text-left text-sm text-bad hover:bg-bad/10 cursor-pointer">Remove…</button>
-          </div>
-        )}
       </div>
     </Card>
   );
