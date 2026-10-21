@@ -83,7 +83,6 @@ export interface Settings {
   retentionDays: number;
   notifyOnCredentialPrompt: boolean;
   preloadSecrets: boolean;
-  dismissedSigningNotice: boolean;
   onboarded: boolean;
   recoveryKeySaved: boolean;
 }

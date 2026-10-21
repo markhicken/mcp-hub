@@ -105,7 +105,6 @@ export function snapshot(version: string): Snapshot {
       retentionDays: 30,
       notifyOnCredentialPrompt: true,
       preloadSecrets: false,
-      dismissedSigningNotice: true,
       onboarded: true,
       recoveryKeySaved: true,
     },

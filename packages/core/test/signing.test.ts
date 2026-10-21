@@ -28,16 +28,13 @@ describe("the signing note", () => {
     for (const t of started) await t.stop();
   });
 
-  it("is reported in the snapshot, and dismissing it is saved", async () => {
+  it("is reported in the snapshot", async () => {
     const t = await startHub({}, { detectAdHocSigning: async () => true });
     started.push(t);
     await new Promise((r) => setTimeout(r, 50));
     const snap = (await t.api("GET", "/api/state")).body;
     expect(snap.signing).toEqual({ adHoc: true });
-    expect(snap.settings).toMatchObject({ dismissedSigningNotice: false, preloadSecrets: false });
-    expect((await t.api("PUT", "/api/settings", { dismissedSigningNotice: true })).status).toBe(200);
-    expect((await t.api("GET", "/api/state")).body.settings.dismissedSigningNotice).toBe(true);
-    expect((await t.api("PUT", "/api/settings", { dismissedSigningNotice: "yes" })).status).toBe(400);
+    expect(snap.settings).toMatchObject({ preloadSecrets: false });
   });
 
   it("is not reported for a normal run", async () => {

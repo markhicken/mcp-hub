@@ -91,15 +91,12 @@ export function SettingsPage({ snap, theme, setTheme, onIntro }: Props) {
         <Row label="Load secrets when MCP Hub starts" hint="Reads the secrets of start-when-needed servers up front, so your password manager asks once while you're looking instead of the first time each server is used. You're told which servers first, and every read appears in History. Off by default.">
           <Switch checked={s.preloadSecrets} onChange={(v) => save({ preloadSecrets: v })} label="Load secrets when MCP Hub starts" />
         </Row>
-        {snap.signing.adHoc && !s.preloadSecrets && !s.dismissedSigningNotice && (
+        {snap.signing.adHoc && !s.preloadSecrets && (
           <div role="note" className="flex flex-wrap items-center justify-between gap-3 bg-surface-2/60 px-5 py-3 text-xs text-muted">
             <p className="max-w-xl">
               This build of MCP Hub isn't signed with a developer certificate, so macOS treats each update as a new app and may ask again for approvals you already gave, such as letting it read 1Password. Loading secrets at start means you're asked once, when MCP Hub opens.
             </p>
-            <span className="flex shrink-0 gap-2">
-              <Button size="sm" onClick={() => save({ preloadSecrets: true })}>Turn it on</Button>
-              <Button size="sm" variant="ghost" onClick={() => save({ dismissedSigningNotice: true }, "Dismissed")}>Dismiss</Button>
-            </span>
+            <Button size="sm" className="shrink-0" onClick={() => save({ preloadSecrets: true })}>Turn it on</Button>
           </div>
         )}
       </Section>

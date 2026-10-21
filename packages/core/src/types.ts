@@ -78,8 +78,6 @@ export interface Settings {
    * while you are looking. Off by default: nothing is read until a server is actually wanted.
    */
   preloadSecrets: boolean;
-  /** The user dismissed the note about this build being signed ad hoc (macOS asking for approvals again after updates). */
-  dismissedSigningNotice: boolean;
   onboarded: boolean;
   /** The user confirmed they saved their encryption recovery key. */
   recoveryKeySaved: boolean;
@@ -189,7 +187,6 @@ export const DEFAULT_SETTINGS: Settings = {
   retentionDays: 30,
   notifyOnCredentialPrompt: true,
   preloadSecrets: false,
-  dismissedSigningNotice: false,
   onboarded: false,
   recoveryKeySaved: false,
 };
@@ -203,7 +200,7 @@ export const SETTING_LIMITS = {
   retentionDays: [1, 3650],
 } as const satisfies Partial<Record<keyof Settings, readonly [number, number]>>;
 
-const BOOLEAN_SETTINGS = ["rememberSignIns", "requireClientToken", "allowTcpMcp", "notifyOnCredentialPrompt", "preloadSecrets", "dismissedSigningNotice", "onboarded", "recoveryKeySaved"] as const;
+const BOOLEAN_SETTINGS = ["rememberSignIns", "requireClientToken", "allowTcpMcp", "notifyOnCredentialPrompt", "preloadSecrets", "onboarded", "recoveryKeySaved"] as const;
 
 /**
  * Turns whatever was saved (an older version's file, a hand-edited one) into settings that are all valid.

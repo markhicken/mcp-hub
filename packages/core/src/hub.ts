@@ -987,7 +987,6 @@ export class Hub {
         bool("allowTcpMcp");
         bool("notifyOnCredentialPrompt");
         bool("preloadSecrets");
-        bool("dismissedSigningNotice");
         bool("onboarded");
         bool("recoveryKeySaved");
         bool("rememberSignIns");
