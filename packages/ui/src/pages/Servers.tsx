@@ -213,7 +213,7 @@ function LabelBar({ labels, active, servers, onSelect, onApply }: { labels: stri
   const onCount = group.filter((s) => s.config.enabled).length;
   const othersOn = servers.some((s) => s.config.enabled && !group.includes(s));
   const pill = (selected: boolean) =>
-    cx("inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition cursor-pointer", selected ? "border-accent bg-accent text-white" : "border-border bg-surface text-muted hover:border-accent/50 hover:text-fg");
+    cx("inline-flex h-7 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition cursor-pointer", selected ? "border-accent-solid bg-accent-solid text-white" : "border-border bg-surface text-muted hover:border-accent/50 hover:text-fg");
   return (
     <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2">
       <div role="group" aria-label="Filter by label" className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">

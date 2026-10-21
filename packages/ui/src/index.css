@@ -10,6 +10,7 @@
   --fg: #151826;
   --muted: #6b7388;
   --accent: #5b5bf0;
+  --accent-solid: #5b5bf0;
   --accent-fg: #ffffff;
   --good: #12a05c;
   --warn: #c9830a;
@@ -26,7 +27,9 @@
   --fg: #eceef6;
   --muted: #8b93aa;
   --accent: #7c7cff;
-  --accent-fg: #0d0f15;
+  /* The lighter accent suits text and icons on dark; filled buttons with white text need this deeper one. */
+  --accent-solid: #5b5bf0;
+  --accent-fg: #ffffff;
   --good: #3ccf8e;
   --warn: #f0b03c;
   --bad: #ff6b72;
@@ -42,6 +45,7 @@
   --color-fg: var(--fg);
   --color-muted: var(--muted);
   --color-accent: var(--accent);
+  --color-accent-solid: var(--accent-solid);
   --color-accent-fg: var(--accent-fg);
   --color-good: var(--good);
   --color-warn: var(--warn);
