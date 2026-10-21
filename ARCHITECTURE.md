@@ -309,7 +309,8 @@ What MCP Hub does, in detail. (The README is the short version.)
 ## 16. Releasing
 
 ```bash
-node scripts/version.mjs set 1.2.3     # writes 1.2.3 into every file that carries the version (8 of them)
+npm run version-up -- patch            # or minor / major: raises the version in every file that carries it (8 of them) and in package-lock.json
+                                       # (node scripts/version.mjs set 1.2.3 writes an exact version instead)
 git commit -am "Release 1.2.3"
 git push origin master                 # or merge a pull request into master
 ```
