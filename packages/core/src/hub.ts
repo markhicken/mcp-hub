@@ -6,7 +6,7 @@ import { ClientGate, type GateOptions } from "./clients.js";
 import { ChildRegistry } from "./children.js";
 import { childrenPath } from "./paths.js";
 import { SecretBox } from "./credentials/box.js";
-import { CredentialBroker } from "./credentials/broker.js";
+import { CredentialBroker, type AccessEvent, type PromptEvent } from "./credentials/broker.js";
 import { SignInStore } from "./credentials/signins.js";
 import { loadSecretBox, osKeyStore, type KeyStore } from "./credentials/keystore.js";
 import { run as runCommand } from "./credentials/exec.js";
@@ -16,12 +16,14 @@ import { installVaultCli } from "./credentials/vault-installer.js";
 import { candidatePaths, knownApps, scanClientConfigs } from "./import.js";
 import { buildExport, parseImport, planImport, type ClashChoice } from "./config-transfer.js";
 import { installServer, installServers, migrateClientConfig, previewInstall, previewInstallServers } from "./install.js";
+import { History, HISTORY_KINDS, type HistoryKind } from "./history.js";
 import { HubManager, HttpError } from "./manager.js";
 import { McpEndpoint, readJson } from "./mcp-endpoint.js";
 import { Metrics, type UsageRange } from "./metrics.js";
 import { ConfigStore, slugify } from "./store.js";
 import { notify, openExternal, pickSavePath, revealInFileManager } from "./system.js";
-import type { ServerConfig, Settings, SourceConfig, SourceType } from "./types.js";
+import { SETTING_LIMITS, type ServerConfig, type Settings, type SourceConfig, type SourceType } from "./types.js";
+import { detectAdHocSigning } from "./signing.js";
 import { VERSION } from "./version.js";
 
 type Msg = Record<string, any>;
@@ -36,6 +38,10 @@ export interface HubOptions {
   /** Per-run secret shared with the UI. Required for every /api call. */
   uiToken: string;
   metricsPath: string;
+  /** Replaces the check for an ad-hoc signed app (tests). */
+  detectAdHocSigning?: () => Promise<boolean>;
+  /** Where the plain-language activity history is kept. Defaults to next to the usage database (in memory for ":memory:"). */
+  historyPath?: string;
   configPath: string;
   uiDir?: string;
   /** Command clients can use to launch the stdio shim. */
@@ -96,6 +102,10 @@ export class Hub {
   readonly children: ChildRegistry;
   private signInSweeper?: NodeJS.Timeout;
   readonly metrics: Metrics;
+  readonly history: History;
+  private historyPruner?: NodeJS.Timeout;
+  /** Whether this is the packaged app signed ad hoc; only ever used to show an explanation. */
+  private adHocSigned = false;
   readonly manager: HubManager;
   readonly endpoint: McpEndpoint;
   readonly clients: ClientGate;
@@ -103,7 +113,8 @@ export class Hub {
   private socketServer?: Server;
   private listeningPort = 0;
   private readonly sseClients = new Set<ServerResponse>();
-  private lastNotify = 0;
+  private readonly lastNotify = new Map<string, number>();
+  private historyPing?: NodeJS.Timeout;
   private baseEnvCache: () => NodeJS.ProcessEnv;
   private readonly keyStore: KeyStore;
   private readonly box: SecretBox;
@@ -130,6 +141,8 @@ export class Hub {
     this.signInSweeper.unref();
     this.autoConfigureVault();
     this.metrics = new Metrics(opts.metricsPath);
+    this.history = new History(opts.historyPath ?? (opts.metricsPath === ":memory:" ? ":memory:" : join(dirname(opts.metricsPath), "history.sqlite")));
+    this.history.onChange(() => this.scheduleHistoryPing());
     this.broker = new CredentialBroker({
       getSources: () => this.store.sources,
       getCacheTtlSeconds: () => this.store.settings.cacheTtlSeconds,
@@ -142,6 +155,7 @@ export class Hub {
       store: this.store,
       broker: this.broker,
       metrics: this.metrics,
+      history: this.history,
       getPort: () => this.listeningPort,
       baseEnv: this.baseEnvCache,
       logDir: join(opts.dataDir, "logs"),
@@ -151,18 +165,43 @@ export class Hub {
     this.endpoint = new McpEndpoint(this.manager, this.metrics);
     this.clients = new ClientGate(opts.gate);
     this.clients.on("change", () => this.broadcast("state", this.snapshot()));
-    this.clients.on("gone", (id: string) => this.endpoint.dropClientSessions(id));
+    this.clients.on("gone", (id: string, name: string, status: string) => {
+      this.endpoint.dropClientSessions(id);
+      if (status === "allowed") this.history.record({ kind: "app", action: "left", app: name });
+    });
     this.clients.on("pending", (c: { name: string }) => {
+      this.history.record({ kind: "app", action: "asked", app: c.name });
       if (!opts.quiet) notify("MCP Hub", `${c.name} wants to use MCP Hub. Open MCP Hub to allow or deny it.`);
+    });
+    this.clients.on("decided", (c: { name: string; status: string; allowed: string[] | null }, before: string) => {
+      const names = (c.allowed ?? []).map((id) => this.manager.get(id)?.config.name).filter((n): n is string => !!n);
+      const detail = c.allowed === null ? "every server" : names.length ? names.join(", ") : "no servers";
+      const action = c.status === "denied" ? (before === "allowed" ? "revoked" : "denied") : before === "allowed" ? "changed" : "allowed";
+      this.history.record({ kind: "app", action, app: c.name, detail });
     });
 
     this.manager.on("change", () => this.broadcast("state", this.snapshot()));
     this.manager.on("log", (e) => this.broadcast("log", e));
-    this.broker.on("prompt", (p) => {
+    // Every use of a secret goes in the history, whether it came from the password manager or from memory.
+    this.broker.on("access", (a: AccessEvent) => {
+      this.history.record({
+        kind: "secret",
+        action: a.outcome,
+        serverId: a.requester,
+        serverName: this.manager.get(a.requester)?.config.name ?? a.requester,
+        source: a.sourceName,
+        trigger: a.trigger,
+        outcome: a.outcome,
+      });
+    });
+    this.broker.on("prompt", (p: PromptEvent) => {
       if (opts.quiet || !this.store.settings.notifyOnCredentialPrompt) return;
-      if (Date.now() - this.lastNotify < 15_000) return;
-      this.lastNotify = Date.now();
-      notify("MCP Hub", `"${p.requester}" is requesting a secret from ${p.sourceName}`);
+      // Throttled per server, so a burst of reads for one server is one notification but another server still gets its own.
+      const last = this.lastNotify.get(p.requester) ?? 0;
+      if (Date.now() - last < 15_000) return;
+      this.lastNotify.set(p.requester, Date.now());
+      const name = this.manager.get(p.requester)?.config.name ?? p.requester;
+      notify("MCP Hub", `"${name}" is requesting a secret from ${p.sourceName}${p.trigger ? ` (${p.trigger})` : ""}`);
     });
   }
 
@@ -215,8 +254,49 @@ export class Hub {
     this.server = server;
     await this.listenSocket();
     this.metrics.start();
-    this.metrics.prune(this.store.settings.retentionDays);
+    void (this.opts.detectAdHocSigning ?? detectAdHocSigning)().then(
+      (adHoc) => {
+        this.adHocSigned = adHoc;
+        if (adHoc) this.manager.notifyChange();
+      },
+      () => {},
+    );
+    this.pruneHistory();
+    this.historyPruner = setInterval(() => this.pruneHistory(), 3_600_000);
+    this.historyPruner.unref();
     return this.listeningPort;
+  }
+
+  /** Keep usage and activity history to the "keep history for" setting. */
+  private pruneHistory(): void {
+    const days = this.store.settings.retentionDays;
+    this.metrics.prune(days);
+    this.history.prune(days);
+  }
+
+  /** Tells open UIs the history changed; bursts become one nudge. */
+  private scheduleHistoryPing(): void {
+    if (this.historyPing) return;
+    this.historyPing = setTimeout(() => {
+      this.historyPing = undefined;
+      this.broadcast("history", {});
+    }, 250);
+    this.historyPing.unref();
+  }
+
+  /**
+   * Start the always-on servers and, if the user asked for it, read the secrets of the start-when-needed ones ahead of
+   * time. Reading secrets is never silent: the user is told which servers and why before the first read, and each
+   * read lands in the history like any other.
+   */
+  async startServers(): Promise<void> {
+    const preload = this.store.settings.preloadSecrets
+      ? this.manager.preloadSecrets("MCP Hub started (loading secrets ahead of time)", (names) => {
+          this.history.record({ kind: "preload", action: "announced", detail: `Loading secrets ahead of time for ${names.join(", ")}` });
+          if (!this.opts.quiet && this.store.settings.notifyOnCredentialPrompt) notify("MCP Hub", `Loading secrets for ${names.length} server${names.length === 1 ? "" : "s"}: ${names.join(", ")}`);
+        })
+      : Promise.resolve(0);
+    await Promise.all([this.manager.start(), preload.catch(() => 0)]);
   }
 
   /** The socket apps connect through, if it is up. */
@@ -276,6 +356,11 @@ export class Hub {
       this.server.closeAllConnections?.();
     });
     this.metrics.close();
+    if (this.historyPruner) clearInterval(this.historyPruner);
+    this.historyPruner = undefined;
+    if (this.historyPing) clearTimeout(this.historyPing);
+    this.historyPing = undefined;
+    this.history.close();
   }
 
   // ------------------------------------------------------------------ security
@@ -448,6 +533,7 @@ export class Hub {
         encryption: { ...this.broker.encryption(), locked: !this.box.persistent && (this.store.hasSealedValues() || this.broker.memory.savedCount() > 0 || this.signIns.savedCount() > 0) },
       },
       settings: s,
+      signing: { adHoc: this.adHocSigned },
       environment: { vaultAddress: this.baseEnvCache().VAULT_ADDR || null },
     };
   }
@@ -685,6 +771,7 @@ export class Hub {
     }
     if (m === "POST" && p === "/api/credentials/lock") {
       broker.lock();
+      this.history.record({ kind: "vault", action: "locked" });
       return json(res, 200, { ok: true });
     }
 
@@ -693,6 +780,7 @@ export class Hub {
       const body = (await readJson(req)) as { sourceId?: unknown; ref?: unknown } | undefined;
       if (typeof body?.sourceId !== "string" || typeof body.ref !== "string") throw new HttpError(400, "sourceId and ref are required.");
       if (!broker.forget(body.sourceId, body.ref)) throw new HttpError(404, "That secret is not in memory.");
+      this.history.record({ kind: "vault", action: "forgot-one", source: store.sources.find((s) => s.id === body.sourceId)?.name ?? "" });
       return json(res, 200, { ok: true });
     }
 
@@ -806,6 +894,23 @@ export class Hub {
       return json(res, 200, { ok: true });
     }
 
+    // ---- history: what MCP Hub did, in plain words (secret reads, app access, server starts and stops)
+    if (m === "GET" && p === "/api/history") {
+      const kinds = (url.searchParams.get("kind") ?? "").split(",").filter(Boolean);
+      const bad = kinds.find((k) => !HISTORY_KINDS.includes(k as HistoryKind));
+      if (bad) throw new HttpError(400, `kind must be one or more of ${HISTORY_KINDS.join(", ")}`);
+      const before = Number(url.searchParams.get("before")) || undefined;
+      const limit = Number(url.searchParams.get("limit")) || undefined;
+      return json(res, 200, {
+        ...this.history.query({ q: url.searchParams.get("q") ?? undefined, kinds: kinds as HistoryKind[], serverId: url.searchParams.get("server") ?? undefined, before, limit }),
+        retentionDays: store.settings.retentionDays,
+      });
+    }
+    if (m === "DELETE" && p === "/api/history") {
+      this.history.clear();
+      return json(res, 200, { ok: true });
+    }
+
     // ---- usage
     // Start over: forget usage history (everything, or one server) and zero the totals on the server cards.
     if (m === "DELETE" && p === "/api/usage") {
@@ -846,14 +951,16 @@ export class Hub {
           if (typeof v !== "boolean") throw new HttpError(400, `${k} must be a boolean`);
           (patch as Record<string, unknown>)[k] = v;
         };
-        num("port", 1024, 65535);
-        num("cacheTtlSeconds", 0, 30 * 86400);
-        num("signInTtlSeconds", 0, 365 * 86400);
-        num("denialCooldownSeconds", 0, 3600);
-        num("retentionDays", 1, 3650);
+        num("port", ...SETTING_LIMITS.port);
+        num("cacheTtlSeconds", ...SETTING_LIMITS.cacheTtlSeconds);
+        num("signInTtlSeconds", ...SETTING_LIMITS.signInTtlSeconds);
+        num("denialCooldownSeconds", ...SETTING_LIMITS.denialCooldownSeconds);
+        num("retentionDays", ...SETTING_LIMITS.retentionDays);
         bool("requireClientToken");
         bool("allowTcpMcp");
         bool("notifyOnCredentialPrompt");
+        bool("preloadSecrets");
+        bool("dismissedSigningNotice");
         bool("onboarded");
         bool("recoveryKeySaved");
         bool("rememberSignIns");
@@ -862,6 +969,8 @@ export class Hub {
         if (patch.cacheTtlSeconds !== undefined) broker.applyTtl();
         if (patch.rememberSignIns !== undefined) manager.syncRememberedSignIns();
         if (patch.signInTtlSeconds !== undefined) this.signIns.expire();
+        // A shorter "keep history for" takes effect now, not at the next hourly sweep.
+        if (patch.retentionDays !== undefined) this.pruneHistory();
         manager.notifyChange();
         return json(res, 200, { settings: next, restartRequired: patch.port !== undefined && patch.port !== this.listeningPort });
       }

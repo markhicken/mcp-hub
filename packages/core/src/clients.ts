@@ -122,7 +122,8 @@ const pidAlive = (pid: number): boolean => {
 /**
  * Per-app approval for clients that connect over the local socket. One decision covers every
  * connection the app opens, and it lasts until the app quits or the hub restarts. Memory only.
- * Events: "change" (list changed), "pending" (a new app is waiting for a decision), "gone" (an app quit; carries its id).
+ * Events: "change" (list changed), "pending" (a new app is waiting for a decision), "decided" (the user answered; carries
+ * the app and its previous status), "gone" (an app quit; carries its id, name and status).
  */
 export class ClientGate extends EventEmitter {
   private readonly clients = new Map<string, ClientInfo>();
@@ -199,8 +200,10 @@ export class ClientGate extends EventEmitter {
   decide(id: string, allow: boolean, servers: string[] | null = null): boolean {
     const c = this.clients.get(id);
     if (!c) return false;
+    const before = c.status;
     c.status = allow ? "allowed" : "denied";
     c.allowed = allow && servers ? [...new Set(servers)] : null;
+    this.emit("decided", copy(c), before);
     for (const w of this.waiters.get(id) ?? []) w();
     this.waiters.delete(id);
     this.emit("change");
@@ -213,7 +216,7 @@ export class ClientGate extends EventEmitter {
     for (const c of [...this.clients.values()]) {
       if (alive(c.pid)) continue;
       this.clients.delete(c.id);
-      this.emit("gone", c.id);
+      this.emit("gone", c.id, c.name, c.status);
       for (const [pid, id] of this.byPid) if (id === c.id) this.byPid.delete(pid);
       for (const w of this.waiters.get(c.id) ?? []) w();
       this.waiters.delete(c.id);

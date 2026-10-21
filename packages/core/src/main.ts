@@ -4,7 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ChildRegistry } from "./children.js";
 import { Hub } from "./hub.js";
-import { childrenPath, configPath, dataDir, runtimePath, socketPath, usageDbPath } from "./paths.js";
+import { childrenPath, configPath, dataDir, historyDbPath, runtimePath, socketPath, usageDbPath } from "./paths.js";
 import { loadShellEnv } from "./system.js";
 import { VERSION } from "./version.js";
 
@@ -72,6 +72,7 @@ export async function main(): Promise<void> {
     dataDir: dir,
     configPath: configPath(dir),
     metricsPath: usageDbPath(dir),
+    historyPath: historyDbPath(dir),
     socketPath: socketPath(dir),
     uiToken,
     uiDir: findUiDir(),
@@ -101,7 +102,7 @@ export async function main(): Promise<void> {
   process.stdout.write(JSON.stringify(ready) + "\n");
   process.stderr.write(`MCP Hub ${VERSION} listening on ${hub.baseUrl}\nOpen the UI: ${ready.url}\n`);
 
-  void hub.manager.start();
+  void hub.startServers();
 
   let stopping = false;
   const shutdown = async (code = 0) => {

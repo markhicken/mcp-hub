@@ -65,9 +65,16 @@ export interface Settings {
   /** Let clients reach /mcp/* over localhost HTTP with no approval (they would otherwise use the bridge). */
   allowTcpMcp: boolean;
   clientToken: string;
-  /** Days of usage history to keep. */
+  /** Days of usage and activity history to keep. */
   retentionDays: number;
   notifyOnCredentialPrompt: boolean;
+  /**
+   * Read the secrets of start-when-needed servers when MCP Hub starts, so the password manager asks once, up front,
+   * while you are looking. Off by default: nothing is read until a server is actually wanted.
+   */
+  preloadSecrets: boolean;
+  /** The user dismissed the note about this build being signed ad hoc (macOS asking for approvals again after updates). */
+  dismissedSigningNotice: boolean;
   onboarded: boolean;
   /** The user confirmed they saved their encryption recovery key. */
   recoveryKeySaved: boolean;
@@ -176,6 +183,34 @@ export const DEFAULT_SETTINGS: Settings = {
   clientToken: "",
   retentionDays: 30,
   notifyOnCredentialPrompt: true,
+  preloadSecrets: false,
+  dismissedSigningNotice: false,
   onboarded: false,
   recoveryKeySaved: false,
 };
+
+/** The range each numeric setting accepts. Anything outside it (or not a number) falls back to the default. */
+export const SETTING_LIMITS = {
+  port: [1024, 65535],
+  cacheTtlSeconds: [0, 30 * 86400],
+  signInTtlSeconds: [0, 365 * 86400],
+  denialCooldownSeconds: [0, 3600],
+  retentionDays: [1, 3650],
+} as const satisfies Partial<Record<keyof Settings, readonly [number, number]>>;
+
+const BOOLEAN_SETTINGS = ["rememberSignIns", "requireClientToken", "allowTcpMcp", "notifyOnCredentialPrompt", "preloadSecrets", "dismissedSigningNotice", "onboarded", "recoveryKeySaved"] as const;
+
+/**
+ * Turns whatever was saved (an older version's file, a hand-edited one) into settings that are all valid.
+ * A missing, mistyped or out-of-range value becomes its default, so every setting always has a sane value.
+ */
+export function normalizeSettings(saved: Partial<Record<keyof Settings, unknown>> | undefined): Settings {
+  const out: Settings = { ...DEFAULT_SETTINGS, ...(saved as Partial<Settings>) };
+  for (const [key, [min, max]] of Object.entries(SETTING_LIMITS) as Array<[keyof typeof SETTING_LIMITS, readonly [number, number]]>) {
+    const v = out[key];
+    out[key] = typeof v === "number" && Number.isFinite(v) && v >= min && v <= max ? Math.round(v) : DEFAULT_SETTINGS[key];
+  }
+  for (const key of BOOLEAN_SETTINGS) if (typeof out[key] !== "boolean") out[key] = DEFAULT_SETTINGS[key];
+  if (typeof out.clientToken !== "string") out.clientToken = DEFAULT_SETTINGS.clientToken;
+  return out;
+}

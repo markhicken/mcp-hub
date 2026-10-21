@@ -48,6 +48,17 @@ export interface PromptEvent {
   requester: string;
   sourceName: string;
   sourceType: SourceType;
+  /** Why the secret is wanted, as a short phrase ("Claude connected", "MCP Hub started"). */
+  trigger?: string;
+}
+
+/** Every use of a secret: read from its source, or handed out from memory. Never carries the value. */
+export interface AccessEvent {
+  requester: string;
+  trigger: string;
+  sourceName: string;
+  sourceType: SourceType;
+  outcome: "read" | "memory" | "denied" | "timeout" | "not-found" | "unavailable";
 }
 
 interface CacheItem {
@@ -63,7 +74,8 @@ interface CacheItem {
  * - deduplicates concurrent requests for the same reference
  * - serializes reads per source so the user sees one prompt at a time
  * - backs off after a denied prompt
- * Events: "prompt" (before a read that may show a system prompt), "change" (cache/state changed).
+ * Events: "prompt" (before a read that may show a system prompt), "access" (every use of a secret, with its outcome),
+ * "change" (cache/state changed).
  */
 export class CredentialBroker extends EventEmitter {
   readonly memory: LocalSecrets;
@@ -141,21 +153,21 @@ export class CredentialBroker extends EventEmitter {
   }
 
   /** Replaces every {{ref}} in a template. A bare "op://..." value is treated as a reference too. */
-  async resolveTemplate(template: string, requester: string): Promise<string> {
+  async resolveTemplate(template: string, requester: string, trigger = ""): Promise<string> {
     const trimmed = template.trim();
-    if (!trimmed.includes("{{") && this.isReference(trimmed)) return this.resolve(trimmed, requester);
+    if (!trimmed.includes("{{") && this.isReference(trimmed)) return this.resolve(trimmed, requester, trigger);
 
     const refs = new Set<string>();
     for (const m of template.matchAll(TEMPLATE_RE)) refs.add(m[1]!);
     if (!refs.size) return template;
     const values = new Map<string, string>();
-    for (const ref of refs) values.set(ref, await this.resolve(ref, requester));
+    for (const ref of refs) values.set(ref, await this.resolve(ref, requester, trigger));
     return template.replace(TEMPLATE_RE, (_all, ref: string) => values.get(ref) ?? "");
   }
 
-  async resolveRecord(rec: Record<string, string> | undefined, requester: string): Promise<Record<string, string>> {
+  async resolveRecord(rec: Record<string, string> | undefined, requester: string, trigger = ""): Promise<Record<string, string>> {
     const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(rec ?? {})) out[k] = await this.resolveTemplate(v, requester);
+    for (const [k, v] of Object.entries(rec ?? {})) out[k] = await this.resolveTemplate(v, requester, trigger);
     return out;
   }
 
@@ -164,29 +176,47 @@ export class CredentialBroker extends EventEmitter {
     return values.some((v) => !!v && (v.includes("{{") || this.isReference(v.trim())));
   }
 
-  async resolve(ref: string, requester: string): Promise<string> {
+  async resolve(ref: string, requester: string, trigger = ""): Promise<string> {
     const source = this.findSource(ref);
     const key = `${source.id}\u0000${ref}`;
+    const report = (outcome: AccessEvent["outcome"]) => this.emit("access", { requester, trigger, sourceName: source.name, sourceType: source.type, outcome } satisfies AccessEvent);
+    const fail = (err: unknown): never => {
+      if (err instanceof CredentialError) {
+        report(err.kind === "denied" ? "denied" : err.kind === "not-found" ? "not-found" : /timed out/i.test(err.message) ? "timeout" : "unavailable");
+      } else {
+        report("unavailable");
+      }
+      throw err;
+    };
 
     const hit = this.cache.get(key);
-    if (hit && (hit.expiresAt === null || hit.expiresAt > this.now())) return this.box.open(hit.value, key);
+    if (hit && (hit.expiresAt === null || hit.expiresAt > this.now())) {
+      const value = this.box.open(hit.value, key);
+      report("memory");
+      return value;
+    }
     if (hit) this.cache.delete(key);
 
     const cooldown = this.cooldownUntil.get(source.id) ?? 0;
     if (cooldown > this.now()) {
       const s = Math.ceil((cooldown - this.now()) / 1000);
-      throw new CredentialError(`Credential access was denied recently. Try again in ${s}s.`, "denied");
+      return fail(new CredentialError(`Credential access was denied recently. Try again in ${s}s.`, "denied"));
     }
 
     const pending = this.inflight.get(key);
-    if (pending) return pending;
+    // Another caller is already reading this secret: it gets the same value, from memory, once that read finishes.
+    if (pending) return pending.then((v) => (report("memory"), v));
 
     const provider = this.providerFor(source);
     const promise = this.enqueue(source.id, async () => {
       // A queued read ahead of us may already have filled the cache.
       const again = this.cache.get(key);
-      if (again && (again.expiresAt === null || again.expiresAt > this.now())) return this.box.open(again.value, key);
-      const prompt: PromptEvent = { ref, requester, sourceName: source.name, sourceType: source.type };
+      if (again && (again.expiresAt === null || again.expiresAt > this.now())) {
+        const value = this.box.open(again.value, key);
+        report("memory");
+        return value;
+      }
+      const prompt: PromptEvent = { ref, requester, sourceName: source.name, sourceType: source.type, trigger };
       const readId = ++this.readSeq;
       this.reading.set(readId, { ...prompt, startedAt: this.now() });
       this.emit("prompt", prompt);
@@ -196,13 +226,14 @@ export class CredentialBroker extends EventEmitter {
         const ttl = this.opts.getCacheTtlSeconds();
         const fetchedAt = this.now();
         this.cache.set(key, { value: this.box.seal(value, key), sourceId: source.id, fetchedAt, expiresAt: ttl > 0 ? fetchedAt + ttl * 1000 : null });
+        report("read");
         this.emit("change");
         return value;
       } catch (err) {
         if (err instanceof CredentialError && err.kind === "denied") {
           this.cooldownUntil.set(source.id, this.now() + this.opts.getDenialCooldownSeconds() * 1000);
         }
-        throw err;
+        return fail(err);
       } finally {
         this.reading.delete(readId);
         this.emit("change");

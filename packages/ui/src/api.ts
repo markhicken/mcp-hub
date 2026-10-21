@@ -68,6 +68,7 @@ interface Store {
 let store: Store = { snapshot: null, connected: false, unauthorized: false };
 const listeners = new Set<() => void>();
 const logListeners = new Set<(serverId: string, line: LogLine) => void>();
+const historyListeners = new Set<() => void>();
 
 function set(patch: Partial<Store>): void {
   store = { ...store, ...patch };
@@ -94,6 +95,7 @@ export function startEvents(): void {
       const d = JSON.parse((e as MessageEvent).data) as { serverId: string; line: LogLine };
       logListeners.forEach((l) => l(d.serverId, d.line));
     });
+    es.addEventListener("history", () => historyListeners.forEach((l) => l()));
     es.onerror = () => {
       es?.close();
       es = null;
@@ -124,4 +126,10 @@ export function useStore(): Store {
 export function onLog(fn: (serverId: string, line: LogLine) => void): () => void {
   logListeners.add(fn);
   return () => logListeners.delete(fn);
+}
+
+/** Runs whenever MCP Hub records something new in its history. */
+export function onHistory(fn: () => void): () => void {
+  historyListeners.add(fn);
+  return () => historyListeners.delete(fn);
 }

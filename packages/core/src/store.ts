@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { SEAL_PREFIX, SecretBox } from "./credentials/box.js";
-import { DEFAULT_SETTINGS, type PersistedConfig, type ServerConfig, type Settings, type SourceConfig } from "./types.js";
+import { normalizeSettings, type PersistedConfig, type ServerConfig, type Settings, type SourceConfig } from "./types.js";
 
 const ID_RE = /^[a-z0-9][a-z0-9-_]{0,62}$/;
 
@@ -156,7 +156,7 @@ export class ConfigStore {
         } catch {}
       }
     }
-    const settings: Settings = { ...DEFAULT_SETTINGS, ...(parsed.settings ?? {}) };
+    const settings: Settings = normalizeSettings(parsed.settings);
     // 1 hour was the old default and caused repeat prompts; secrets now stay until locked unless changed again.
     if (settings.cacheTtlSeconds === 3600 && !parsed.settings?.cacheTtlMigrated) {
       settings.cacheTtlSeconds = 0;

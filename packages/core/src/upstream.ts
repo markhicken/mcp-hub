@@ -65,6 +65,20 @@ interface Resolved {
   clientSecret?: string;
 }
 
+/** What happened to a connection, for the history. */
+export interface LifecycleEvent {
+  from: ConnectionState;
+  to: ConnectionState;
+  trigger: string;
+  /** The stop was the idle timeout, not someone's choice. */
+  idle: boolean;
+}
+
+/** Every field of a server definition that may hold a {{credential}} reference. */
+function credentialTemplates(cfg: ServerConfig): Array<string | undefined> {
+  return [cfg.command, cfg.cwd, cfg.url, ...(cfg.args ?? []), ...Object.values(cfg.env ?? {}), ...Object.values(cfg.headers ?? {}), cfg.oauth?.clientSecret];
+}
+
 export interface DownstreamHandle {
   id: string;
   /** The app on the other end, for usage tracking and the "in use by" list. */
@@ -151,6 +165,10 @@ export class UpstreamConnection extends EventEmitter {
   /** Failed automatic attempts in a row; a success or any manual action starts the count again. */
   private failures = 0;
   private autoRetry = false;
+  /** Why the current (or last) connect was started; shown in the history and on secret reads. */
+  private trigger = "MCP Hub";
+  /** Set while an idle stop is under way, so the history can tell it from other stops. */
+  private stopReason?: "idle";
   private idleTimer?: NodeJS.Timeout;
   private generation = 0;
   private connecting?: Promise<void>;
@@ -236,18 +254,25 @@ export class UpstreamConnection extends EventEmitter {
   }
 
   private setState(state: ConnectionState, error?: string): void {
+    const from = this.state;
     this.state = state;
     this.error = error;
+    if (from !== state) this.emit("lifecycle", { from, to: state, trigger: this.trigger, idle: this.stopReason === "idle" } satisfies LifecycleEvent);
     this.emit("change");
   }
 
   // ---------------------------------------------------------------- lifecycle
 
-  /** Connect (idempotent). Resolves when connected or rejects with the failure reason. */
-  connect(): Promise<void> {
+  /**
+   * Connect (idempotent). Resolves when connected or rejects with the failure reason.
+   * `trigger` says why, as a short phrase for the history ("Claude connected"); it is also what a secret read
+   * made on the way is attributed to.
+   */
+  connect(trigger?: string): Promise<void> {
     this.wantConnected = true;
     if (this.state === "connected") return Promise.resolve();
     if (this.connecting) return this.connecting;
+    this.trigger = this.autoRetry ? "Automatic retry" : (trigger ?? "MCP Hub");
     if (!this.autoRetry) {
       this.failures = 0;
       this.backoff = this.retryBaseMs;
@@ -310,15 +335,7 @@ export class UpstreamConnection extends EventEmitter {
     // The references are only readable for the duration of this call.
     const cfg = this.deps.reveal(this.config);
     const { broker } = this.deps;
-    const templates = [
-      cfg.command,
-      cfg.cwd,
-      cfg.url,
-      ...(cfg.args ?? []),
-      ...Object.values(cfg.env ?? {}),
-      ...Object.values(cfg.headers ?? {}),
-      cfg.oauth?.clientSecret,
-    ];
+    const templates = credentialTemplates(cfg);
     const needs = broker.needsCredentials(templates);
     this.credentials = needs ? "resolving" : "none";
     if (needs) this.emit("change");
@@ -326,7 +343,7 @@ export class UpstreamConnection extends EventEmitter {
     const secrets = new Set<string>();
     const track = async (s: string | undefined): Promise<string | undefined> => {
       if (s === undefined) return undefined;
-      const v = await broker.resolveTemplate(s, cfg.id);
+      const v = await broker.resolveTemplate(s, cfg.id, this.trigger);
       if (v !== s) {
         secrets.add(v);
         const bearer = /^(?:Bearer|Basic|Token)\s+(.+)$/i.exec(v);
@@ -642,7 +659,10 @@ export class UpstreamConnection extends EventEmitter {
       const idleFor = Date.now() - (this.lastActivityAt ?? this.connectedAt ?? Date.now());
       if (this.pending.size === 0 && idleFor > mins * 60_000) {
         this.deps.logs.add("info", `Idle for ${mins} min; disconnecting`);
-        void this.disconnect();
+        this.stopReason = "idle";
+        void this.disconnect().finally(() => {
+          this.stopReason = undefined;
+        });
       }
     }, 30_000);
     this.idleTimer.unref();
@@ -678,15 +698,36 @@ export class UpstreamConnection extends EventEmitter {
   }
 
   /** Make sure the upstream is up before answering a downstream initialize. */
-  async ensureConnected(): Promise<string | null> {
+  async ensureConnected(trigger?: string): Promise<string | null> {
     if (this.state === "connected") return null;
     if (!this.config.enabled) return this.unavailableMessage();
     try {
-      await this.connect();
+      await this.connect(trigger);
     } catch {
       // reported through unavailableMessage
     }
     return this.isConnected() ? null : this.unavailableMessage();
+  }
+
+  /** Does this server's definition refer to any credential? */
+  usesCredentials(): boolean {
+    return this.deps.broker.needsCredentials(credentialTemplates(this.deps.reveal(this.config)));
+  }
+
+  /**
+   * Read this server's secrets now, without starting it, so its first start doesn't wait for the credential
+   * source. Each read is announced and recorded like any other. Failures are left for the real start to report.
+   */
+  async preloadCredentials(trigger: string): Promise<void> {
+    const cfg = this.deps.reveal(this.config);
+    for (const t of credentialTemplates(cfg)) {
+      if (!t || !this.deps.broker.needsCredentials([t])) continue;
+      try {
+        await this.deps.broker.resolveTemplate(t, cfg.id, trigger);
+      } catch {
+        return;
+      }
+    }
   }
 
   /** Read through a method so TypeScript doesn't keep a stale narrowing across awaits. */
@@ -714,7 +755,7 @@ export class UpstreamConnection extends EventEmitter {
     if (this.state !== "connected" || !this.transport) {
       if (isRequest(msg) && this.config.enabled) {
         try {
-          await this.connect();
+          await this.connect(client ? `${client} sent a request` : undefined);
         } catch {
           // fall through to the error below
         }

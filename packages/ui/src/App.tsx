@@ -1,21 +1,23 @@
-import { BarChart3, KeyRound, Server, Settings as SettingsIcon, WifiOff } from "lucide-react";
+import { BarChart3, History as HistoryIcon, KeyRound, Server, Settings as SettingsIcon, WifiOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, initToken, startEvents, useStore } from "./api";
 import { ClientApproval } from "./Clients";
 import { ImportDialog, Welcome } from "./Onboarding";
 import { CredentialsPage } from "./pages/Credentials";
+import { HistoryPage } from "./pages/History";
 import { ServersPage } from "./pages/Servers";
 import { SettingsPage } from "./pages/Settings";
 import { UsagePage } from "./pages/Usage";
 import { useTheme } from "./theme";
 import { EmptyState, Skeleton, ToastProvider, cx } from "./ui";
 
-type Page = "servers" | "credentials" | "usage" | "settings";
+type Page = "servers" | "credentials" | "usage" | "history" | "settings";
 
 const NAV: Array<{ id: Page; label: string; icon: typeof Server }> = [
   { id: "servers", label: "Servers", icon: Server },
   { id: "credentials", label: "Credentials", icon: KeyRound },
   { id: "usage", label: "Usage", icon: BarChart3 },
+  { id: "history", label: "History", icon: HistoryIcon },
   { id: "settings", label: "Settings", icon: SettingsIcon },
 ];
 
@@ -121,6 +123,7 @@ export function App() {
                 {page === "servers" && <ServersPage snap={snap} onImport={() => setImporting(true)} focus={focus} />}
                 {page === "credentials" && <CredentialsPage snap={snap} />}
                 {page === "usage" && <UsagePage snap={snap} />}
+                {page === "history" && <HistoryPage snap={snap} />}
                 {page === "settings" && <SettingsPage snap={snap} theme={theme} setTheme={setTheme} onIntro={() => setIntro(true)} />}
               </div>
             )}

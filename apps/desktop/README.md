@@ -93,6 +93,14 @@ isn't trusted, so a downloaded copy needs **Open Anyway** in System Settings →
 (or `xattr -cr "/Applications/MCP Hub.app"`). `APPLE_SIGNING_IDENTITY` overrides the ad-hoc identity.
 Distribution without that step needs a Developer ID certificate and notarization.
 
+**Local builds keep a stable identity.** macOS ties what you've allowed an app to do (for example reading 1Password, or
+"access data from other apps") to its code identity, and an ad-hoc signature changes with every rebuild, so the prompts
+come back each time. `npm run build:app` signs through `scripts/with-signing.mjs`, which uses `APPLE_SIGNING_IDENTITY` if
+set, otherwise the first Developer ID Application, Apple Development or "MCP Hub Local Signing" certificate in your
+keychain, otherwise ad hoc (it says which). Run `npm run setup:signing` once to create the local certificate; it adds one
+self-signed certificate to your login keychain and asks macOS to trust it for code signing. Delete "MCP Hub Local
+Signing" in Keychain Access to undo it. After the first build with a new identity, approve the prompts once more.
+
 - **macOS:** a Developer ID Application certificate and notarization. Set
   `APPLE_SIGNING_IDENTITY`, and either `APPLE_ID` + `APPLE_PASSWORD` (app-specific) +
   `APPLE_TEAM_ID`, or `APPLE_API_ISSUER` + `APPLE_API_KEY` + `APPLE_API_KEY_PATH`, then run

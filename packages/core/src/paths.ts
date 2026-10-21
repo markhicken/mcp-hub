@@ -18,4 +18,5 @@ export const configPath = (dir = dataDir()) => join(dir, "config.json");
 export const runtimePath = (dir = dataDir()) => join(dir, "runtime.json");
 export const socketPath = (dir = dataDir()) => join(dir, "hub.sock");
 export const usageDbPath = (dir = dataDir()) => join(dir, "usage.sqlite");
+export const historyDbPath = (dir = dataDir()) => join(dir, "history.sqlite");
 export const childrenPath = (dir = dataDir()) => join(dir, "children.json");

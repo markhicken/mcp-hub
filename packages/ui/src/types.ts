@@ -81,8 +81,33 @@ export interface Settings {
   clientToken: string;
   retentionDays: number;
   notifyOnCredentialPrompt: boolean;
+  preloadSecrets: boolean;
+  dismissedSigningNotice: boolean;
   onboarded: boolean;
   recoveryKeySaved: boolean;
+}
+
+export type HistoryKind = "secret" | "preload" | "app" | "server" | "config" | "vault";
+
+export interface HistoryEvent {
+  id: number;
+  t: number;
+  kind: HistoryKind;
+  action: string;
+  serverId: string;
+  serverName: string;
+  app: string;
+  source: string;
+  trigger: string;
+  outcome: string;
+  count: number;
+  title: string;
+}
+
+export interface HistoryResult {
+  events: HistoryEvent[];
+  more: boolean;
+  retentionDays: number;
 }
 
 export interface ClientInfo {
@@ -125,6 +150,8 @@ export interface Snapshot {
     encryption: { algorithm: string; keyStore: string; persistent: boolean; problem?: string; locked: boolean };
   };
   settings: Settings;
+  /** `adHoc`: the packaged app is signed without a certificate, so macOS may re-ask for approvals after an update. */
+  signing: { adHoc: boolean };
   environment: { vaultAddress: string | null };
 }
 

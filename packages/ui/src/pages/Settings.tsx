@@ -85,14 +85,29 @@ export function SettingsPage({ snap, theme, setTheme, onIntro }: Props) {
             <option value="0">Don't pause</option><option value="10">10 seconds</option><option value="60">1 minute</option><option value="300">5 minutes</option>
           </Select>
         </Row>
-        <Row label="Notify when a secret is requested" hint="Shows which server triggered a 1Password or keychain prompt.">
+        <Row label="Notify when a secret is requested" hint="Shows which server is asking for a secret and why. Everything is also recorded in History, whatever you choose here.">
           <Switch checked={s.notifyOnCredentialPrompt} onChange={(v) => save({ notifyOnCredentialPrompt: v })} label="Notify on credential prompts" />
         </Row>
+        <Row label="Load secrets when MCP Hub starts" hint="Reads the secrets of start-when-needed servers up front, so your password manager asks once while you're looking instead of the first time each server is used. You're told which servers first, and every read appears in History. Off by default.">
+          <Switch checked={s.preloadSecrets} onChange={(v) => save({ preloadSecrets: v })} label="Load secrets when MCP Hub starts" />
+        </Row>
+        {snap.signing.adHoc && !s.preloadSecrets && !s.dismissedSigningNotice && (
+          <div role="note" className="flex flex-wrap items-center justify-between gap-3 bg-surface-2/60 px-5 py-3 text-xs text-muted">
+            <p className="max-w-xl">
+              This build of MCP Hub isn't signed with a developer certificate, so macOS treats each update as a new app and may ask again for approvals you already gave, such as letting it read 1Password. Loading secrets at start means you're asked once, when MCP Hub opens.
+            </p>
+            <span className="flex shrink-0 gap-2">
+              <Button size="sm" onClick={() => save({ preloadSecrets: true })}>Turn it on</Button>
+              <Button size="sm" variant="ghost" onClick={() => save({ dismissedSigningNotice: true }, "Dismissed")}>Dismiss</Button>
+            </span>
+          </div>
+        )}
       </Section>
 
       <Section title="Data">
-        <Row label="Keep usage history for" hint="Only sizes and timings are stored.">
+        <Row label="Keep history for" hint="Applies to Usage (sizes and timings only) and History (plain-language events, no secret values or commands).">
           <Select aria-label="Retention" className="w-44" value={String(s.retentionDays)} onChange={(e) => save({ retentionDays: Number(e.target.value) })}>
+            {![7, 30, 90, 365].includes(s.retentionDays) && <option value={String(s.retentionDays)}>{s.retentionDays} days</option>}
             <option value="7">7 days</option><option value="30">30 days</option><option value="90">90 days</option><option value="365">1 year</option>
           </Select>
         </Row>

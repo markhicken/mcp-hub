@@ -159,7 +159,7 @@ export class McpEndpoint {
 
     const init = messages.find((m) => m.method === "initialize" && m.id !== undefined);
     if (init) {
-      const unavailable = await conn.ensureConnected();
+      const unavailable = await conn.ensureConnected(`${client.name || "An app"} connected`);
       // Connecting is not usage, so none of this is counted in the usage history.
       if (unavailable) {
         conn.logs.add("warn", `${client.name} couldn't connect: ${unavailable}`);
