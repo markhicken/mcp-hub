@@ -15,8 +15,8 @@ type Page = "servers" | "credentials" | "usage" | "history" | "settings";
 
 const NAV: Array<{ id: Page; label: string; icon: typeof Server }> = [
   { id: "servers", label: "Servers", icon: Server },
-  { id: "credentials", label: "Credentials", icon: KeyRound },
   { id: "usage", label: "Usage", icon: BarChart3 },
+  { id: "credentials", label: "Credentials", icon: KeyRound },
   { id: "history", label: "History", icon: HistoryIcon },
   { id: "settings", label: "Settings", icon: SettingsIcon },
 ];

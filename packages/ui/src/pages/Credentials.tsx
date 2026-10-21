@@ -32,13 +32,6 @@ export function CredentialsPage({ snap }: { snap: Snapshot }) {
         actions={<Button variant="danger" onClick={() => setForgetting(true)} disabled={!cached.length}><Eraser className="size-4" /> Forget all</Button>}
       />
 
-      {snap.credentials.reading.length > 0 && (
-        <div className="fade-in flex items-center gap-3 rounded-xl border border-warn/40 bg-warn/10 px-4 py-3 text-sm">
-          <span className="size-2 rounded-full bg-warn pulse-dot" />
-          <span><strong>Waiting for {snap.credentials.reading[0]!.sourceName}.</strong> Approve the prompt on your device.</span>
-        </div>
-      )}
-
       <SetupSection snap={snap} />
 
       <section className="space-y-4">

@@ -88,6 +88,21 @@ export function Skeleton({ className }: { className?: string }) {
   return <div className={cx("animate-pulse rounded-lg bg-surface-2", className)} />;
 }
 
+/** An indeterminate spinner: something is in progress and there is no way to say how far along it is. */
+export function Spinner({ label, className }: { label: string; className?: string }) {
+  return <span role="status" aria-label={label} title={label} className={cx("inline-block size-4 shrink-0 animate-spin rounded-full border-2 border-accent border-t-transparent", className)} />;
+}
+
+/** The current time, refreshed every `everyMs`, so "5m ago" labels stay true while nothing else changes. */
+export function useNow(everyMs = 15_000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), everyMs);
+    return () => clearInterval(t);
+  }, [everyMs]);
+  return now;
+}
+
 // ---------------------------------------------------------------------------- Form controls
 
 const inputCls =

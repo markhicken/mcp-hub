@@ -6,7 +6,7 @@ import { ConnectClientDialog } from "../ConnectClient";
 import { colorFor, formatBytes, formatDuration, formatNumber, timeAgo } from "../lib";
 import { StatusBadge, deriveStatus } from "../status";
 import type { LogLine, ServerStatus, Snapshot } from "../types";
-import { Button, Card, Chip, Confirm, CopyButton, Drawer, EmptyState, PageHeader, Segmented, Switch, cx, useToast } from "../ui";
+import { Button, Card, Chip, Confirm, CopyButton, Drawer, EmptyState, PageHeader, Segmented, Spinner, Switch, cx, useNow, useToast } from "../ui";
 
 interface Props {
   snap: Snapshot;
@@ -29,7 +29,6 @@ export function ServersPage({ snap, onImport, focus }: Props) {
 
   const servers = useMemo(() => snap.servers.filter((s) => `${s.config.name} ${s.id}`.toLowerCase().includes(query.toLowerCase())), [snap.servers, query]);
   const selectedServer = snap.servers.find((s) => s.id === selected) ?? null;
-  const reading = snap.credentials.reading[0];
 
   const act = async (fn: () => Promise<unknown>, ok?: string) => {
     try {
@@ -55,13 +54,6 @@ export function ServersPage({ snap, onImport, focus }: Props) {
           </>
         }
       />
-
-      {reading && (
-        <div className="fade-in mb-4 flex items-center gap-3 rounded-xl border border-warn/40 bg-warn/10 px-4 py-3 text-sm">
-          <span className="size-2 rounded-full bg-warn pulse-dot" />
-          <span><strong>Waiting for {reading.sourceName}.</strong> Approve the prompt on your device so “{reading.requester}” can start.</span>
-        </div>
-      )}
 
       {snap.servers.length === 0 ? (
         <EmptyState icon={<Cable className="size-6" />} title="No servers yet" body="Add the MCP servers you use, or bring them over from Claude, Cursor, Copilot or ChatGPT / Codex. MCP Hub keeps their credentials safe and shows what each one is doing.">
@@ -130,6 +122,7 @@ function ServerCard(props: {
 }) {
   const { server: s, snap } = props;
   const st = deriveStatus(s, snap);
+  const now = useNow(15_000);
   const [menu, setMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -167,9 +160,11 @@ function ServerCard(props: {
 
       <div className="flex flex-wrap items-center gap-2">
         <StatusBadge status={st} server={s} />
+        {(st.key === "credentials" || st.key === "connecting") && <Spinner label={st.label} />}
         {s.state === "needs-auth" && <Button size="sm" variant="primary" onClick={props.onSignIn}><LogIn className="size-3.5" /> Sign in</Button>}
         {s.state === "error" && <Button size="sm" onClick={props.onRestart}><RefreshCw className="size-3.5" /> Retry</Button>}
       </div>
+      {st.key === "credentials" && <p className="-mt-1 text-xs text-muted">Approve the prompt on your device so it can start.</p>}
       {st.detail && (
         // The padding lives on this wrapper: line-clamp on an element that has its own padding lets the clipped lines show in it.
         <div className="rounded-lg bg-bad/8 px-2.5 py-1.5 text-xs text-bad">
@@ -181,7 +176,7 @@ function ServerCard(props: {
       <dl className="mt-auto grid grid-cols-3 gap-2 border-t border-border pt-3 text-xs">
         <Stat icon={<Plug className="size-3" />} label="Tools" value={s.toolCount != null ? String(s.toolCount) : "–"} />
         <Stat icon={<ArrowDownUp className="size-3" />} label="Traffic" value={formatBytes(s.bytesIn + s.bytesOut)} />
-        <Stat icon={<Activity className="size-3" />} label="Last used" value={timeAgo(s.lastActivityAt)} />
+        <Stat icon={<Activity className="size-3" />} label="Last used" value={timeAgo(s.lastActivityAt, now)} />
       </dl>
       </div>
 

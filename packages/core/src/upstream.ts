@@ -55,6 +55,15 @@ interface Pending {
 const seconds = (ms: number): string => `${(ms / 1000).toFixed(1)}s`;
 const requestLabel = (p: { method: string; tool?: string }): string => (p.tool ? `${p.method} ${p.tool}` : p.method);
 
+/**
+ * Apps ask what a server offers (`tools/list`, `prompts/list`, `resources/list`, ...) and whether it is alive
+ * (`ping`) as part of connecting. That is connection overhead, not use, so it is left out of usage, traffic and
+ * "last used". Calling a tool, reading a resource and getting a prompt are use.
+ */
+export function countsAsUse(method: string): boolean {
+  return method !== "ping" && method !== "logging/setLevel" && !method.endsWith("/list");
+}
+
 interface Resolved {
   env: Record<string, string>;
   headers: Record<string, string>;
@@ -746,11 +755,15 @@ export class UpstreamConnection extends EventEmitter {
     if (isNotification(msg) && msg.method === "notifications/initialized") return undefined;
     const size = bytes(msg);
     const client = this.sessions.get(sessionId)?.client?.name ?? "";
-    this.bytesIn += size;
-    this.lastActivityAt = Date.now();
-    this.settleSoon();
-    if (this.sessions.has(sessionId)) this.sessionActivity.set(sessionId, this.lastActivityAt);
-    this.deps.metrics.record({ serverId: this.id, client, bytesIn: size });
+    // Only requests that are real use count (see countsAsUse); notifications and discovery are connection overhead.
+    const use = isRequest(msg) && countsAsUse(msg.method);
+    if (use) {
+      this.bytesIn += size;
+      this.lastActivityAt = Date.now();
+      this.settleSoon();
+      if (this.sessions.has(sessionId)) this.sessionActivity.set(sessionId, this.lastActivityAt);
+      this.deps.metrics.record({ serverId: this.id, client, bytesIn: size });
+    }
 
     if (this.state !== "connected" || !this.transport) {
       if (isRequest(msg) && this.config.enabled) {
@@ -762,8 +775,10 @@ export class UpstreamConnection extends EventEmitter {
       }
       if (this.state !== "connected" || !this.transport) {
         if (!isRequest(msg)) return undefined;
-        this.errors++;
-        this.deps.metrics.record({ serverId: this.id, client, requests: 1, errors: 1 });
+        if (use) {
+          this.errors++;
+          this.deps.metrics.record({ serverId: this.id, client, requests: 1, errors: 1 });
+        }
         return rpcError(msg.id, -32000, this.unavailableMessage());
       }
     }
@@ -857,22 +872,25 @@ export class UpstreamConnection extends EventEmitter {
       const why = out.error?.message ?? (out.result?.isError ? String(out.result?.content?.[0]?.text ?? "tool reported an error") : "");
       this.deps.logs.add(failed ? "warn" : "info", `${requestLabel(p)} from ${p.client || "an app"}: ${failed ? `failed${why ? ` (${String(why).slice(0, 300)})` : ""}` : "ok"} in ${seconds(latency)}`);
     }
-    this.bytesOut += size;
-    this.requests++;
-    if (failed) this.errors++;
-    this.lastActivityAt = Date.now();
-    this.settleSoon();
-    if (this.sessions.has(p.sessionId)) this.sessionActivity.set(p.sessionId, this.lastActivityAt);
-    this.deps.metrics.record({
-      serverId: this.id,
-      client: p.client,
-      bytesOut: size,
-      requests: 1,
-      errors: failed ? 1 : 0,
-      latencyMs: latency,
-      tool: p.tool,
-      toolError: p.tool ? failed || out.result?.isError === true : undefined,
-    });
+    const use = countsAsUse(p.method);
+    if (use) {
+      this.bytesOut += size;
+      this.requests++;
+      if (failed) this.errors++;
+      this.lastActivityAt = Date.now();
+      this.settleSoon();
+      if (this.sessions.has(p.sessionId)) this.sessionActivity.set(p.sessionId, this.lastActivityAt);
+      this.deps.metrics.record({
+        serverId: this.id,
+        client: p.client,
+        bytesOut: size,
+        requests: 1,
+        errors: failed ? 1 : 0,
+        latencyMs: latency,
+        tool: p.tool,
+        toolError: p.tool ? failed || out.result?.isError === true : undefined,
+      });
+    }
     this.emit("change");
     p.resolve(out);
   }

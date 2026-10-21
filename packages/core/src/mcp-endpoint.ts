@@ -200,7 +200,11 @@ export class McpEndpoint {
 
     const responses = await Promise.all(
       requests.map(async (m) => {
-        if (m.method === "ping") return { jsonrpc: "2.0", id: m.id, result: {} } as Msg;
+        if (m.method === "ping") {
+          const pong = { jsonrpc: "2.0", id: m.id, result: {} } as Msg;
+          if (wantsSse && !closed) sse(res, pong);
+          return pong;
+        }
         const r = await conn.forward(session.id, m, (n) => {
           if (wantsSse && !closed) sse(res, n);
         });
