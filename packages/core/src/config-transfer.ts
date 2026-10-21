@@ -83,11 +83,12 @@ export function buildExport(servers: ServerConfig[], sources: SourceConfig[], ve
 
 // ------------------------------------------------------------------ importing
 
-const SERVER_KEYS = ["id", "name", "description", "notes", "transport", "command", "args", "env", "cwd", "url", "headers", "auth", "oauth", "enabled", "lifecycle", "idleTimeoutMinutes"] as const;
+const SERVER_KEYS = ["id", "name", "description", "notes", "labels", "transport", "command", "args", "env", "cwd", "url", "headers", "auth", "oauth", "enabled", "lifecycle", "idleTimeoutMinutes"] as const;
 
 function cleanServer(raw: Record<string, any>): ServerConfig {
   const out: Record<string, any> = {};
   for (const k of SERVER_KEYS) if (raw[k] !== undefined && raw[k] !== null) out[k] = raw[k];
+  if (out.labels !== undefined && !(Array.isArray(out.labels) && out.labels.every((l: unknown) => typeof l === "string"))) delete out.labels;
   out.name = String(out.name ?? "").trim();
   out.id = slugify(String(out.id ?? out.name));
   out.enabled = out.enabled !== false;

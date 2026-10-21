@@ -30,8 +30,8 @@ type Msg = Record<string, any>;
 
 /** Server fields that a replacement starts from scratch on, so nothing of the old definition lingers. */
 const RESET_FIELDS = ["description", "command", "args", "env", "cwd", "url", "headers", "auth", "oauth"] as const;
-/** Replacing from an exported file also takes the file's notes and idle timeout (or clears them). */
-const RESET_FROM_FILE = [...RESET_FIELDS, "notes", "idleTimeoutMinutes"] as const;
+/** Replacing from an exported file also takes the file's notes, labels and idle timeout (or clears them). */
+const RESET_FROM_FILE = [...RESET_FIELDS, "notes", "labels", "idleTimeoutMinutes"] as const;
 
 export interface HubOptions {
   dataDir: string;
@@ -613,6 +613,13 @@ export class Hub {
       manager.notifyChange();
       return json(res, 200, { ok: true });
     }
+    // Turn every server with a label (or, without a label, every server) on or off, or switch to a label ("only": those on, everything else off).
+    if (m === "POST" && p === "/api/labels/apply") {
+      const body = (await readJson(req)) as { label?: unknown; action?: unknown } | undefined;
+      if (body?.label != null && (typeof body.label !== "string" || !body.label.trim())) throw new HttpError(400, "label must be a non-empty string");
+      if (body?.action !== "on" && body?.action !== "off" && body?.action !== "only") throw new HttpError(400, 'action must be "on", "off" or "only"');
+      return json(res, 200, await manager.applyLabel(body.label ?? null, body.action));
+    }
     if (m === "POST" && p === "/api/servers") {
       const body = (await readJson(req)) as Partial<ServerConfig> | undefined;
       if (!body?.name) throw new HttpError(400, "name is required");
@@ -633,7 +640,8 @@ export class Hub {
       const id = decodeURIComponent(r[1]!);
       if (m === "PUT") {
         const body = (await readJson(req)) as Partial<ServerConfig>;
-        this.endpoint.dropServerSessions(id);
+        // Renaming, notes and labels leave the server running, so the apps attached to it keep their sessions.
+        if (manager.changesConnection(id, body)) this.endpoint.dropServerSessions(id);
         return json(res, 200, await manager.update(id, body));
       }
       if (m === "DELETE") {

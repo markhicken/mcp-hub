@@ -15,10 +15,36 @@ export function slugify(name: string): string {
   return s || "server";
 }
 
+export const MAX_LABELS = 20;
+export const MAX_LABEL_LENGTH = 40;
+
+/**
+ * Tidies a server's labels: trims them, squeezes inner spaces, drops blanks and repeats (ignoring case), and spells
+ * each like the same label already used elsewhere (`known`), so "Work" and "work" stay one label. Anything that
+ * isn't a list of text is returned as is, for `validateServer` to refuse. No labels at all becomes `undefined`.
+ */
+export function tidyLabels(labels: unknown, known: Iterable<string> = []): unknown {
+  if (!Array.isArray(labels) || labels.some((l) => typeof l !== "string")) return labels;
+  const spelling = new Map<string, string>();
+  for (const l of known) if (!spelling.has(l.toLowerCase())) spelling.set(l.toLowerCase(), l);
+  const out = new Map<string, string>();
+  for (const raw of labels as string[]) {
+    const l = raw.trim().replace(/\s+/g, " ");
+    const key = l.toLowerCase();
+    if (l && !out.has(key)) out.set(key, spelling.get(key) ?? l);
+  }
+  return out.size ? [...out.values()] : undefined;
+}
+
+export const hasLabel = (s: ServerConfig, label: string): boolean => (s.labels ?? []).some((l) => l.toLowerCase() === label.trim().toLowerCase());
+
 export function validateServer(s: Partial<ServerConfig>): string | null {
   if (!s.id || !ID_RE.test(s.id)) return "id must be 1-63 chars of a-z, 0-9, '-' or '_'";
   if (!s.name?.trim()) return "name is required";
   if (s.notes !== undefined && (typeof s.notes !== "string" || s.notes.length > 10_000)) return "notes must be text of at most 10,000 characters";
+  if (s.labels !== undefined && (!Array.isArray(s.labels) || s.labels.length > MAX_LABELS || s.labels.some((l) => typeof l !== "string" || !l.trim() || l.length > MAX_LABEL_LENGTH))) {
+    return `labels must be a list of at most ${MAX_LABELS} labels of up to ${MAX_LABEL_LENGTH} characters`;
+  }
   if (s.transport === "stdio") {
     if (!s.command?.trim()) return "command is required for stdio servers";
   } else if (s.transport === "http") {

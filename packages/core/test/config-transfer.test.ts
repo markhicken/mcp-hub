@@ -84,12 +84,12 @@ describe("planning an import", () => {
 });
 
 describe("export and import between hubs", () => {
-  it("moves servers, sources and notes from one hub to another, reporting what to re-enter", async () => {
+  it("moves servers, sources, notes and labels from one hub to another, reporting what to re-enter", async () => {
     const a = await startHub();
     const b = await startHub();
     try {
       await a.api("PUT", "/api/secrets/wiki-token", { value: "super-secret-value" });
-      await a.api("POST", "/api/servers", { name: "Wiki", transport: "stdio", command: "npx", enabled: false, notes: "Ask Sam", env: { TOKEN: "{{secret://wiki-token}}", OPT: "plain" } });
+      await a.api("POST", "/api/servers", { name: "Wiki", transport: "stdio", command: "npx", enabled: false, notes: "Ask Sam", labels: ["work"], env: { TOKEN: "{{secret://wiki-token}}", OPT: "plain" } });
       await a.api("POST", "/api/sources", { type: "vault", name: "Team Vault", options: { address: "https://vault.example.com" } });
 
       const exported = await a.api("GET", "/api/config/export");
@@ -108,17 +108,19 @@ describe("export and import between hubs", () => {
       const done = await b.api("POST", "/api/config/import", { data: exported.body });
       expect(done.body).toMatchObject({ dryRun: false, added: ["Wiki"], failed: [], sourcesAdded: ["Team Vault"] });
       const cfg = (await b.api("GET", "/api/servers/wiki")).body.config;
-      expect(cfg).toMatchObject({ name: "Wiki", notes: "Ask Sam", enabled: false, env: { TOKEN: "{{secret://wiki-token}}", OPT: "plain" } });
+      expect(cfg).toMatchObject({ name: "Wiki", notes: "Ask Sam", labels: ["work"], enabled: false, env: { TOKEN: "{{secret://wiki-token}}", OPT: "plain" } });
 
       // Importing the same file again skips, and "replace" overwrites in place.
       expect((await b.api("POST", "/api/config/import", { data: exported.body })).body).toMatchObject({ added: [], skipped: ["Wiki"] });
       exported.body.servers[0].env = { TOKEN: "{{secret://other}}" };
       delete exported.body.servers[0].notes;
+      delete exported.body.servers[0].labels;
       const replaced = await b.api("POST", "/api/config/import", { data: exported.body, onClash: "replace" });
       expect(replaced.body.replaced).toEqual(["Wiki"]);
       const after = (await b.api("GET", "/api/servers/wiki")).body.config;
       expect(after.env).toEqual({ TOKEN: "{{secret://other}}" });
       expect(after).not.toHaveProperty("notes");
+      expect(after).not.toHaveProperty("labels");
       expect((await b.api("GET", "/api/state")).body.servers).toHaveLength(1);
     } finally {
       await a.stop();

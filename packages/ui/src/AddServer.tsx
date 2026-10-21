@@ -1,5 +1,5 @@
-import { ArrowLeft, ClipboardPaste, Globe, KeyRound, Lock, Plus, Terminal, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { ArrowLeft, ClipboardPaste, Globe, KeyRound, Lock, Plus, Terminal, Trash2, X } from "lucide-react";
+import { useId, useState } from "react";
 import { api } from "./api";
 import { isCredentialRef, parseServerJson, slugify, splitArgs } from "./lib";
 import type { ServerConfig, ServerStatus } from "./types";
@@ -30,6 +30,8 @@ const TEMPLATES: Template[] = [
 
 interface Props {
   existing?: ServerStatus;
+  /** Labels already used on any server, offered as suggestions. */
+  knownLabels?: string[];
   onClose: () => void;
 }
 
@@ -42,7 +44,7 @@ const fromPairs = (p: Pair[]): Record<string, string> | undefined => {
   return e.length ? Object.fromEntries(e.map((x) => [x.k.trim(), x.v])) : undefined;
 };
 
-export function AddServerDialog({ existing, onClose }: Props) {
+export function AddServerDialog({ existing, knownLabels = [], onClose }: Props) {
   const toast = useToast();
   const [step, setStep] = useState<Step>(existing ? "form" : "choose");
   const [paste, setPaste] = useState("");
@@ -65,10 +67,12 @@ export function AddServerDialog({ existing, onClose }: Props) {
   const [lifecycle, setLifecycle] = useState<"keep-alive" | "on-demand">(c?.lifecycle ?? "keep-alive");
   const [idle, setIdle] = useState(String(c?.idleTimeoutMinutes ?? 15));
   const [notes, setNotes] = useState(c?.notes ?? "");
+  const [labels, setLabels] = useState<string[]>(c?.labels ?? []);
 
   const fill = (t: Partial<ServerConfig>) => {
     setName(t.name ?? "");
     setNotes(t.notes ?? "");
+    setLabels(t.labels ?? []);
     setTransport(t.transport ?? "stdio");
     setCommand(t.command ?? "");
     setArgs((t.args ?? []).map((a) => (/\s/.test(a) ? `"${a}"` : a)).join(" "));
@@ -89,6 +93,7 @@ export function AddServerDialog({ existing, onClose }: Props) {
       enabled: existing?.config.enabled ?? true,
       lifecycle,
       notes: notes.trim(),
+      labels,
       idleTimeoutMinutes: lifecycle === "on-demand" ? Number(idle) || 0 : undefined,
       ...(transport === "stdio"
         ? { command: command.trim(), args: splitArgs(args.replace(/\s*\r?\n\s*/g, " ")), cwd: cwd.trim() || undefined, env: fromPairs(env), url: undefined, headers: undefined, auth: undefined }
@@ -237,6 +242,9 @@ export function AddServerDialog({ existing, onClose }: Props) {
               )}
             </div>
           </Field>
+          <Field label="Labels" hint="Optional. Group servers (work, personal…) to filter them and turn a group on or off together.">
+            <LabelsInput value={labels} onChange={setLabels} suggestions={knownLabels} />
+          </Field>
           <Field label="Notes" hint="Optional. For you only: where the token comes from, who to ask, anything worth remembering.">
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="e.g. Token comes from the team vault. Expires monthly." className="resize-y font-sans text-sm" />
           </Field>
@@ -244,6 +252,47 @@ export function AddServerDialog({ existing, onClose }: Props) {
         </div>
       )}
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------- labels
+
+/** Labels as removable chips, plus a box that adds one on Enter or comma and suggests labels already in use. */
+function LabelsInput({ value, onChange, suggestions }: { value: string[]; onChange: (v: string[]) => void; suggestions: string[] }) {
+  const [draft, setDraft] = useState("");
+  const listId = useId();
+  const has = (l: string) => value.some((x) => x.toLowerCase() === l.toLowerCase());
+  const add = (raw: string) => {
+    const l = raw.trim().replace(/\s+/g, " ").slice(0, 40);
+    if (l && !has(l)) onChange([...value, suggestions.find((s) => s.toLowerCase() === l.toLowerCase()) ?? l]);
+    setDraft("");
+  };
+  return (
+    <div className="flex min-h-9 flex-wrap items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/25">
+      {value.map((l) => (
+        <span key={l} className="inline-flex items-center gap-1 rounded-md bg-accent/12 py-0.5 pl-2 pr-1 text-xs font-medium text-accent">
+          {l}
+          <button type="button" aria-label={`Remove label ${l}`} onClick={() => onChange(value.filter((x) => x !== l))} className="rounded p-0.5 hover:bg-accent/20 cursor-pointer"><X className="size-3" /></button>
+        </span>
+      ))}
+      <input
+        aria-label="Add a label"
+        list={listId}
+        value={draft}
+        maxLength={40}
+        onChange={(e) => (e.target.value.includes(",") ? e.target.value.split(",").forEach(add) : setDraft(e.target.value))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            add(draft);
+          } else if (e.key === "Backspace" && !draft && value.length) onChange(value.slice(0, -1));
+        }}
+        onBlur={() => add(draft)}
+        placeholder={value.length ? "" : "e.g. work"}
+        className="h-7 min-w-24 flex-1 bg-transparent text-sm text-fg placeholder:text-muted/70 focus:outline-none focus-visible:outline-none"
+      />
+      <datalist id={listId}>{suggestions.filter((s) => !has(s)).map((s) => <option key={s} value={s} />)}</datalist>
+    </div>
   );
 }
 

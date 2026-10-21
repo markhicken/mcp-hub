@@ -6,6 +6,7 @@ export interface ServerConfig {
   name: string;
   description?: string;
   notes?: string;
+  labels?: string[];
   transport: "stdio" | "http";
   command?: string;
   args?: string[];

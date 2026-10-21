@@ -14,6 +14,7 @@
 - **Secrets stay private.** Your 1Password, Keychain, Vault and environment secrets are fetched when needed, kept encrypted, and never written to config files in readable form.
 - **See what's happening.** Live status for every server, which apps are connected right now, a usage dashboard for data, requests, errors and speed, and a searchable History of every secret read, app let in and server started.
 - **Set up in a few clicks.** Import the servers your apps already use, or add MCP Hub to an app's config for you. Every change is previewed and backed up first.
+- **Switch sets of servers.** Label servers (work, personal…) and turn a group on or off, or switch to just that group, in one click.
 - **Private by design.** Everything runs on your computer. No telemetry, and nothing leaves your machine except the MCP servers you configure.
 
 ## Works with

@@ -7,7 +7,7 @@ import type { ChildRegistry } from "./children.js";
 import type { Metrics } from "./metrics.js";
 import type { SignInStore } from "./credentials/signins.js";
 import type { ConfigStore } from "./store.js";
-import { validateServer } from "./store.js";
+import { hasLabel, tidyLabels, validateServer } from "./store.js";
 import type { ServerConfig, ServerStatus } from "./types.js";
 import { UpstreamConnection, type LifecycleEvent } from "./upstream.js";
 
@@ -145,7 +145,30 @@ export class HubManager extends EventEmitter {
     await Promise.all(tasks);
   }
 
+  /** Every label in use on servers other than `exceptId`, for spelling a new label like the existing one. */
+  private knownLabels(exceptId?: string): string[] {
+    return this.opts.store.servers.filter((s) => s.id !== exceptId).flatMap((s) => s.labels ?? []);
+  }
+
+  private setLabels(cfg: ServerConfig): void {
+    const labels = tidyLabels(cfg.labels, this.knownLabels(cfg.id)) as string[] | undefined;
+    if (labels === undefined) delete cfg.labels;
+    else cfg.labels = labels;
+  }
+
+  /**
+   * Would this edit change how the server runs? Its name, description, notes and labels don't, so changing only
+   * those leaves the server and the apps attached to it alone.
+   */
+  changesConnection(id: string, patch: Partial<ServerConfig>): boolean {
+    const conn = this.conns.get(id);
+    if (!conn) return true;
+    const before = this.opts.store.reveal(conn.config);
+    return runSignature(before) !== runSignature({ ...before, ...patch, id });
+  }
+
   async add(cfg: ServerConfig): Promise<ServerStatus> {
+    this.setLabels(cfg);
     const err = validateServer(cfg);
     if (err) throw new HttpError(400, err);
     if (this.conns.has(cfg.id)) throw new HttpError(409, `A server with id "${cfg.id}" already exists`);
@@ -164,13 +187,16 @@ export class HubManager extends EventEmitter {
     const next: ServerConfig = { ...this.opts.store.reveal(conn.config), ...patch, id };
     // An emptied notes box means no notes, not an empty string kept in the config.
     if (typeof next.notes === "string" && !next.notes.trim()) delete next.notes;
+    this.setLabels(next);
     const err = validateServer(next);
     if (err) throw new HttpError(400, err);
+    const restart = this.changesConnection(id, patch);
     const wasConnected = conn.state === "connected" || conn.state === "connecting";
     this.opts.store.upsertServer(next);
     conn.updateConfig(this.opts.store.getServer(id)!);
     conn.syncRememberedSignIn();
     this.opts.history?.record({ kind: "config", action: "changed", serverId: id, serverName: next.name });
+    if (!restart) return conn.status();
     const stored = this.opts.store.getServer(id)!;
     if (wasConnected || (stored.enabled && stored.lifecycle === "keep-alive")) {
       await conn.disconnect();
@@ -229,18 +255,42 @@ export class HubManager extends EventEmitter {
     }
   }
 
-  async setEnabled(id: string, enabled: boolean): Promise<ServerStatus> {
+  async setEnabled(id: string, enabled: boolean, trigger = "You turned it on"): Promise<ServerStatus> {
     const conn = this.conns.get(id);
     if (!conn) throw new HttpError(404, "No such server");
     this.opts.store.upsertServer({ ...conn.config, enabled });
     conn.updateConfig({ ...conn.config, enabled });
     if (enabled) {
       // Fire and forget: the UI follows the "connecting" state through events.
-      void conn.connect("You turned it on").catch(() => {});
+      void conn.connect(trigger).catch(() => {});
     } else {
       await conn.disconnect();
     }
     return conn.status();
+  }
+
+  /**
+   * Turn a labeled group of servers on or off, or every server when `label` is null. "only" works like switching
+   * profiles: the servers with the label are turned on and every other server is turned off. Returns the names of
+   * the servers that changed.
+   */
+  async applyLabel(label: string | null, action: LabelAction): Promise<{ label: string | null; on: string[]; off: string[] }> {
+    const servers = this.opts.store.servers;
+    let named: string | null = null;
+    if (label !== null) {
+      named = servers.flatMap((s) => s.labels ?? []).find((l) => l.toLowerCase() === label.trim().toLowerCase()) ?? null;
+      if (!named) throw new HttpError(404, `No server has the label "${label.trim()}"`);
+    } else if (action === "only") {
+      throw new HttpError(400, "A label is required to switch to it");
+    }
+    const inGroup = (s: ServerConfig) => named === null || hasLabel(s, named);
+    const want = (s: ServerConfig) => (action === "only" ? inGroup(s) : inGroup(s) ? action === "on" : s.enabled);
+    const on = servers.filter((s) => !s.enabled && want(s));
+    const off = servers.filter((s) => s.enabled && !want(s));
+    const trigger = named === null ? `You turned on all servers` : action === "only" ? `You switched to the "${named}" label` : `You turned on the "${named}" label`;
+    await Promise.all([...off.map((s) => this.setEnabled(s.id, false)), ...on.map((s) => this.setEnabled(s.id, true, trigger))]);
+    if (on.length || off.length) this.opts.history?.record({ kind: "config", action: named === null ? `all-${action}` : `label-${action}`, detail: named ?? undefined });
+    return { label: named, on: on.map((s) => s.name), off: off.map((s) => s.name) };
   }
 
   async restart(id: string): Promise<ServerStatus> {
@@ -294,6 +344,27 @@ export class HubManager extends EventEmitter {
   async shutdown(): Promise<void> {
     await Promise.all([...this.conns.values()].map((c) => c.disconnect().catch(() => {})));
   }
+}
+
+export type LabelAction = "on" | "off" | "only";
+
+/** Fields that only describe a server for the user; changing them doesn't need a restart. */
+const DESCRIPTIVE = new Set<string>(["name", "description", "notes", "labels"]);
+
+/** A stable fingerprint of everything that affects how a server runs. Unset, empty lists and empty maps count as absent. */
+function runSignature(cfg: ServerConfig): string {
+  const norm = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.length ? v.map(norm) : undefined;
+    if (v && typeof v === "object") {
+      const entries = Object.entries(v)
+        .map(([k, x]) => [k, norm(x)] as const)
+        .filter(([, x]) => x !== undefined)
+        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+      return entries.length ? Object.fromEntries(entries) : undefined;
+    }
+    return v;
+  };
+  return JSON.stringify(norm(Object.fromEntries(Object.entries(cfg).filter(([k]) => !DESCRIPTIVE.has(k)))) ?? null);
 }
 
 export class HttpError extends Error {

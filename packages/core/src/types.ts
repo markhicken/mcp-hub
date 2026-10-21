@@ -18,6 +18,11 @@ export interface ServerConfig {
   description?: string;
   /** The user's own free-form notes about this server. Shown on its card; never sent anywhere. */
   notes?: string;
+  /**
+   * The user's own labels ("work", "personal"), used to filter the cards and to turn a group of servers on or off
+   * together. Trimmed, unique ignoring case, and spelled like the same label on other servers; none is left out.
+   */
+  labels?: string[];
   transport: Transport;
   command?: string;
   args?: string[];

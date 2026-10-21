@@ -117,6 +117,11 @@ export function describe(e: Pick<HistoryEvent, "kind" | "action" | "serverName" 
         case "added": return `Added ${server}`;
         case "changed": return `Changed ${server}`;
         case "removed": return `Removed ${server}`;
+        case "all-on": return "You turned on all servers";
+        case "all-off": return "You turned off all servers";
+        case "label-on": return `You turned on the servers labeled "${e.detail}"`;
+        case "label-off": return `You turned off the servers labeled "${e.detail}"`;
+        case "label-only": return `You switched to the servers labeled "${e.detail}" and turned the others off`;
         default: return `${server}: ${e.action}`;
       }
     case "vault":
