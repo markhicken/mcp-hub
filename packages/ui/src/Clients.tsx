@@ -3,17 +3,17 @@ import { useState } from "react";
 import { api } from "./api";
 import { timeAgo } from "./lib";
 import type { ClientInfo, ServerStatus } from "./types";
-import { Button, Dialog, PathLink, cx, useToast } from "./ui";
+import { Button, Chip, Confirm, Dialog, PathLink, cx, useToast } from "./ui";
 
 const DOT = { good: "bg-good", warn: "bg-warn", bad: "bg-bad" } as const;
 const StatusDot = ({ tone }: { tone: keyof typeof DOT }) => <span className={cx("size-2 shrink-0 rounded-full", DOT[tone])} />;
 
-/** `servers` limits what an allowed app may use; leave it out to allow every server. */
+/** `servers` limits what an allowed app may use; leave it out to allow every server. `remember` (default) saves the choice for the app. */
 export function useDecide() {
   const toast = useToast();
-  return async (c: ClientInfo, allow: boolean, servers?: string[]): Promise<boolean> => {
+  return async (c: ClientInfo, allow: boolean, servers?: string[], remember?: boolean): Promise<boolean> => {
     try {
-      await api("POST", `/api/clients/${encodeURIComponent(c.id)}/decision`, { allow, ...(servers ? { servers } : {}) });
+      await api("POST", `/api/clients/${encodeURIComponent(c.id)}/decision`, { allow, ...(servers ? { servers } : {}), ...(remember !== undefined ? { remember } : {}) });
       return true;
     } catch (e) {
       toast((e as Error).message, "error");
@@ -23,19 +23,20 @@ export function useDecide() {
 }
 
 /**
- * Asked once per app, and reused to change an app's access later. Every server is ticked to begin with;
- * the answer covers every connection the app opens until it quits.
+ * Asked once per app, and reused to change an app's access later. Every server is ticked to begin with. The answer
+ * is remembered for the app by default, so it isn't asked again after it restarts.
  */
 export function ClientApproval({ client, servers, onLater, onClose }: { client: ClientInfo; servers: ServerStatus[]; onLater?: () => void; onClose?: () => void }) {
   const decide = useDecide();
   const asking = client.status === "pending";
   const [picked, setPicked] = useState<Set<string>>(() => new Set(client.allowed ?? servers.map((s) => s.id)));
+  const [remember, setRemember] = useState(() => (asking ? true : client.remembered));
   const [busy, setBusy] = useState(false);
   const leave = onLater ?? onClose ?? (() => {});
 
   const answer = async (allow: boolean) => {
     setBusy(true);
-    const ok = await decide(client, allow, allow && servers.length ? [...picked] : undefined);
+    const ok = await decide(client, allow, allow && servers.length ? [...picked] : undefined, remember);
     setBusy(false);
     if (ok) onClose?.();
   };
@@ -88,7 +89,15 @@ export function ClientApproval({ client, servers, onLater, onClose }: { client: 
         ) : (
           <p className="text-muted">There are no servers in MCP Hub yet.</p>
         )}
-        {asking && <p className="text-xs text-muted">You'll be asked again the next time {client.name} starts. Nothing is stored.</p>}
+        {client.running && (
+          <label className="flex cursor-pointer items-start gap-2 text-xs">
+            <input type="checkbox" className="mt-0.5" checked={remember} onChange={(e) => setRemember(e.target.checked)} />
+            <span>
+              <span className="font-medium text-fg">Remember this for {client.name}</span>
+              <span className="block text-muted">{remember ? `MCP Hub won't ask again when ${client.name} restarts. Change or remove it any time in Settings.` : `You'll be asked again the next time ${client.name} starts. Nothing is saved.`}</span>
+            </span>
+          </label>
+        )}
       </div>
     </Dialog>
   );
@@ -96,9 +105,14 @@ export function ClientApproval({ client, servers, onLater, onClose }: { client: 
 
 export function ClientList({ clients, servers }: { clients: ClientInfo[]; servers: ServerStatus[] }) {
   const decide = useDecide();
+  const toast = useToast();
   const [editing, setEditing] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
   const editingClient = clients.find((c) => c.id === editing);
-  if (!clients.length) return <p className="px-5 py-4 text-sm text-muted">No apps have connected since MCP Hub started.</p>;
+  const removingClient = clients.find((c) => c.id === removing);
+  if (!clients.length) return <p className="px-5 py-4 text-sm text-muted">No apps have connected yet.</p>;
+  const verdict = (c: ClientInfo) => (c.status === "allowed" ? (c.allowed ? `Allowed: ${c.allowed.filter((id) => servers.some((s) => s.id === id)).length} of ${servers.length} servers` : "Allowed: every server") : c.status === "pending" ? "Waiting for your answer" : "Denied");
+  const activity = (c: ClientInfo) => (c.running ? `${c.servers.length} requested · active ${timeAgo(c.lastSeen)}` : `not running · last seen ${timeAgo(c.lastSeen)}`);
   return (
     <>
     <ul className="divide-y divide-border">
@@ -106,19 +120,34 @@ export function ClientList({ clients, servers }: { clients: ClientInfo[]; server
         <li key={c.id} className="flex flex-wrap items-center gap-3 px-5 py-3.5">
           <StatusDot tone={c.status === "allowed" ? "good" : c.status === "pending" ? "warn" : "bad"} />
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium">{c.name}</div>
-            <div className="truncate text-xs text-muted">
-              {c.status === "allowed" ? (c.allowed ? `Allowed: ${c.allowed.filter((id) => servers.some((s) => s.id === id)).length} of ${servers.length} servers` : "Allowed: every server") : c.status === "pending" ? "Waiting for your answer" : "Denied"} · {c.servers.length} requested · active {timeAgo(c.lastSeen)}
-            </div>
+            <div className="flex items-center gap-2 text-sm font-medium">{c.name}{c.status !== "pending" && <Chip>{c.remembered ? "Remembered" : "This session only"}</Chip>}</div>
+            <div className="truncate text-xs text-muted">{verdict(c)} · {activity(c)}</div>
             <PathLink running={c.id} path={c.path} className="font-mono text-[11px] text-muted" />
           </div>
           {c.status === "allowed" && <Button size="sm" onClick={() => setEditing(c.id)}>Choose servers…</Button>}
           {c.status !== "allowed" && <Button size="sm" variant="primary" onClick={() => setEditing(c.id)}>Allow…</Button>}
-          {c.status !== "denied" && <Button size="sm" onClick={() => decide(c, false)}>{c.status === "allowed" ? "Revoke" : "Deny"}</Button>}
+          {c.status !== "denied" && <Button size="sm" onClick={() => decide(c, false, undefined, c.status === "pending" ? true : c.remembered)}>{c.status === "allowed" ? "Revoke" : "Deny"}</Button>}
+          {c.status !== "pending" && <Button size="sm" variant="ghost" onClick={() => setRemoving(c.id)}>Remove</Button>}
         </li>
       ))}
     </ul>
     {editingClient && <ClientApproval key={editingClient.id} client={{ ...editingClient, status: editingClient.status === "pending" ? "pending" : "allowed" }} servers={servers} onClose={() => setEditing(null)} />}
+    {removingClient && (
+      <Confirm
+        title={`Remove ${removingClient.name}?`}
+        body={`MCP Hub forgets what you decided about ${removingClient.name}. The next time it connects you'll be asked again, and it can't use any server until you allow it.`}
+        confirmLabel="Remove"
+        onConfirm={async () => {
+          try {
+            await api("DELETE", `/api/clients/${encodeURIComponent(removingClient.id)}`);
+            toast(`${removingClient.name} removed`);
+          } catch (e) {
+            toast((e as Error).message, "error");
+          }
+        }}
+        onClose={() => setRemoving(null)}
+      />
+    )}
     </>
   );
 }

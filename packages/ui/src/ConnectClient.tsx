@@ -47,7 +47,7 @@ export function snippetsFor(client: Client, s: ServerStatus, snap: Snapshot): { 
   const command = shim.command;
   const args = [...shim.args, s.id];
   const entry = { command, args };
-  const approval = "The first time the app connects, MCP Hub asks you to allow it. One answer covers all of that app's servers until it quits.";
+  const approval = "The first time the app connects, MCP Hub asks you to allow it. One answer covers all of that app's servers, and MCP Hub remembers it for that app.";
   // Only the server's own entry: it goes inside the app's existing "mcpServers" object.
   const json = (extra: Record<string, unknown> = {}) =>
     JSON.stringify({ [s.id]: { ...entry, ...extra } }, null, 2)

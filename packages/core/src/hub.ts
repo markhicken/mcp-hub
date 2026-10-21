@@ -163,7 +163,7 @@ export class Hub {
       children: this.children,
     });
     this.endpoint = new McpEndpoint(this.manager, this.metrics);
-    this.clients = new ClientGate(opts.gate);
+    this.clients = new ClientGate({ file: join(opts.dataDir, "apps.json"), ...opts.gate });
     this.clients.on("change", () => this.broadcast("state", this.snapshot()));
     this.clients.on("gone", (id: string, name: string, status: string) => {
       this.endpoint.dropClientSessions(id);
@@ -173,11 +173,22 @@ export class Hub {
       this.history.record({ kind: "app", action: "asked", app: c.name });
       if (!opts.quiet) notify("MCP Hub", `${c.name} wants to use MCP Hub. Open MCP Hub to allow or deny it.`);
     });
-    this.clients.on("decided", (c: { name: string; status: string; allowed: string[] | null }, before: string) => {
-      const names = (c.allowed ?? []).map((id) => this.manager.get(id)?.config.name).filter((n): n is string => !!n);
-      const detail = c.allowed === null ? "every server" : names.length ? names.join(", ") : "no servers";
+    const serversOf = (allowed: string[] | null): string => {
+      const names = (allowed ?? []).map((id) => this.manager.get(id)?.config.name).filter((n): n is string => !!n);
+      return allowed === null ? "every server" : names.length ? names.join(", ") : "no servers";
+    };
+    this.clients.on("decided", (c: { name: string; status: string; allowed: string[] | null }, before: string, remembered: boolean) => {
       const action = c.status === "denied" ? (before === "allowed" ? "revoked" : "denied") : before === "allowed" ? "changed" : "allowed";
-      this.history.record({ kind: "app", action, app: c.name, detail });
+      this.history.record({ kind: "app", action, app: c.name, detail: `${serversOf(c.allowed)}${remembered ? "" : " (this session only)"}` });
+    });
+    // A remembered app came back: its saved choice applied without asking, which the user should be able to see.
+    this.clients.on("restored", (c: { name: string; status: string; allowed: string[] | null }) => {
+      this.history.record({ kind: "app", action: c.status === "allowed" ? "returned" : "returned-denied", app: c.name, detail: serversOf(c.allowed) });
+    });
+    this.clients.on("mismatch", (c: { name: string }) => this.history.record({ kind: "app", action: "signature-changed", app: c.name }));
+    this.clients.on("removed", (c: { name: string }, ids: string[]) => {
+      for (const id of ids) this.endpoint.dropClientSessions(id);
+      this.history.record({ kind: "app", action: "removed", app: c.name });
     });
 
     this.manager.on("change", () => this.broadcast("state", this.snapshot()));
@@ -419,7 +430,7 @@ export class Hub {
     const message =
       verdict.status === "pending"
         ? `Waiting for you to allow ${who} in MCP Hub.`
-        : (verdict.reason ?? `${who} was not allowed to use MCP Hub. Restart ${who} to be asked again, or allow it in MCP Hub → Settings.`);
+        : (verdict.reason ?? `${who} was not allowed to use MCP Hub. Allow it in MCP Hub → Settings, or restart ${who} to be asked again if you chose not to remember your answer.`);
     json(res, 403, { jsonrpc: "2.0", id: null, error: { code: -32001, message, data: { approval: verdict.status } } });
   }
 
@@ -984,8 +995,9 @@ export class Hub {
 
     // ---- apps connected through the local socket
     if (m === "POST" && (r = /^\/api\/clients\/([^/]+)\/decision$/.exec(p))) {
-      const body = (await readJson(req)) as { allow?: unknown; servers?: unknown };
+      const body = (await readJson(req)) as { allow?: unknown; servers?: unknown; remember?: unknown };
       if (typeof body?.allow !== "boolean") throw new HttpError(400, "allow must be a boolean");
+      if (body.remember !== undefined && typeof body.remember !== "boolean") throw new HttpError(400, "remember must be a boolean");
       // `servers` limits what the app may use. Choosing every server that exists means "all", future ones included.
       let servers: string[] | null = null;
       if (body.servers !== undefined) {
@@ -993,7 +1005,12 @@ export class Hub {
         const every = store.servers.every((s) => (body.servers as string[]).includes(s.id));
         servers = every ? null : (body.servers as string[]);
       }
-      if (!this.clients.decide(decodeURIComponent(r[1]!), body.allow, servers)) throw new HttpError(404, "That app is no longer connected");
+      if (!this.clients.decide(decodeURIComponent(r[1]!), body.allow, servers, body.remember !== false)) throw new HttpError(404, "That app isn't known to MCP Hub (it may have been removed)");
+      return json(res, 200, { ok: true });
+    }
+    // Forget an app completely. If it is running it has to be allowed again the next time it connects.
+    if (m === "DELETE" && (r = /^\/api\/clients\/([^/]+)$/.exec(p))) {
+      if (!this.clients.remove(decodeURIComponent(r[1]!))) throw new HttpError(404, "That app isn't known to MCP Hub (it may have been removed)");
       return json(res, 200, { ok: true });
     }
 

@@ -50,7 +50,7 @@ function ConnectedApps({ snap }: { snap: Snapshot }) {
       if (t !== null && (a.lastActivityAt === null || t > a.lastActivityAt)) a.lastActivityAt = t;
     };
     for (const c of clients) {
-      if (c.status !== "allowed") continue;
+      if (c.status !== "allowed" || !c.running) continue;
       const a = entry(c.id, c.name);
       seen(a, c.lastSeen);
       a.active ||= now - c.lastSeen < RECENT_MS;

@@ -96,6 +96,10 @@ export function describe(e: Pick<HistoryEvent, "kind" | "action" | "serverName" 
         case "changed": return `You changed what ${e.app} can use: ${e.detail}`;
         case "denied": return `You denied ${e.app}`;
         case "revoked": return `You revoked ${e.app}'s access`;
+        case "returned": return `${e.app} came back and used the access you saved (${e.detail})`;
+        case "returned-denied": return `${e.app} came back and was turned away, as you chose`;
+        case "signature-changed": return `${e.app} isn't signed the same way as the app you allowed, so MCP Hub is asking again`;
+        case "removed": return `You removed ${e.app}; it has to be allowed again`;
         case "left": return `${e.app} quit`;
         default: return `${e.app}: ${e.action}`;
       }

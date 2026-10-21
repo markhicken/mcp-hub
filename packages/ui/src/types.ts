@@ -123,6 +123,12 @@ export interface ClientInfo {
   servers: string[];
   /** Servers it may use; null means every one, including servers added later. */
   allowed: string[] | null;
+  /** Which app this is across restarts; `id` is one running copy. */
+  identity: string;
+  /** The decision is saved, so it applies again when the app restarts. */
+  remembered: boolean;
+  /** Running now. A remembered app that isn't running is still listed so it can be changed or removed. */
+  running: boolean;
 }
 
 export interface ImportApp {
