@@ -1,7 +1,7 @@
 {
   "name": "mcp-hub",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "A persistent local hub that proxies every MCP server and manages their credentials in memory.",
   "workspaces": [
     "packages/*",
@@ -17,6 +17,7 @@
     "build": "npm run build -w @mcp-hub/core -w @mcp-hub/ui",
     "typecheck": "npm run typecheck --workspaces --if-present && tsc --noEmit -p scripts/screenshots",
     "screenshots": "npm run build -w @mcp-hub/ui && node scripts/screenshots/capture.ts",
+    "version-up": "node scripts/version.mjs bump",
     "test": "npm test --workspaces --if-present",
     "build:sidecars": "node scripts/build-sidecars.mjs",
     "build:app": "npm run build -w @mcp-hub/ui && npm run build:sidecars && node scripts/with-signing.mjs npm run build -w @mcp-hub/desktop && node scripts/collect-dist.mjs",
