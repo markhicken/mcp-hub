@@ -546,16 +546,22 @@ export class Hub {
     if (m === "POST" && (r = /^\/api\/servers\/([^/]+)\/install$/.exec(p))) {
       const id = decodeURIComponent(r[1]!);
       if (!manager.get(id)) throw new HttpError(404, "No such server");
-      const body = (await readJson(req)) as { clients?: unknown; dryRun?: unknown; replace?: unknown };
+      const body = (await readJson(req)) as { clients?: unknown; dryRun?: unknown; replace?: unknown; transport?: unknown };
       const apps = knownApps().map((a) => a.client);
       if (!Array.isArray(body?.clients) || !body.clients.length || body.clients.some((c) => typeof c !== "string" || !apps.includes(c))) {
         throw new HttpError(400, "clients must list one or more known apps");
       }
       for (const flag of [body.dryRun, body.replace]) if (flag !== undefined && typeof flag !== "boolean") throw new HttpError(400, "dryRun and replace must be true or false");
-      if (!this.opts.shim) throw new HttpError(400, "The MCP Hub bridge (mcp-hub-stdio) was not found, so there is nothing to install. Use the packaged MCP Hub app.");
+      if (body.transport !== undefined && body.transport !== "bridge" && body.transport !== "http") throw new HttpError(400, 'transport must be "bridge" or "http"');
+      // Direct HTTP is only offered while the hub accepts it; the token goes in only when the hub asks for one.
+      const s = this.store.settings;
+      if (body.transport === "http" && !s.allowTcpMcp) throw new HttpError(400, "Direct HTTP access is turned off. Allow it in Settings → Security, or install with the bridge.");
+      const http = body.transport === "http" ? { url: manager.mcpUrl(id), ...(s.requireClientToken ? { token: s.clientToken } : {}) } : undefined;
+      if (!http && !this.opts.shim) throw new HttpError(400, "The MCP Hub bridge (mcp-hub-stdio) was not found, so there is nothing to install. Use the packaged MCP Hub app.");
+      const bridge = this.opts.shim ?? { command: "", args: [] };
       // A dry run only reports what would change (which entries would be replaced); nothing is written.
-      if (body.dryRun) return json(res, 200, { preview: previewInstall(id, body.clients as string[], this.opts.shim) });
-      return json(res, 200, { results: installServer(id, body.clients as string[], this.opts.shim, undefined, { replace: body.replace === true }) });
+      if (body.dryRun) return json(res, 200, { preview: previewInstall(id, body.clients as string[], bridge, undefined, { http }) });
+      return json(res, 200, { results: installServer(id, body.clients as string[], bridge, undefined, { replace: body.replace === true, http }) });
     }
 
     // Adds several servers' MCP Hub entries to one app's config file in a single, backed-up edit.

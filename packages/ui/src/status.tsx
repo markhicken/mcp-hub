@@ -33,7 +33,8 @@ export function deriveStatus(s: ServerStatus, snap: Snapshot): DerivedStatus {
     if (s.authenticated) return { key: "authenticated", label: "Authenticated", tone: "good" };
     return { key: "idle", label: "Idle", tone: "good" };
   }
-  return { key: "off", label: "Not connected", tone: "neutral" };
+  if (s.config.lifecycle === "on-demand") return { key: "off", label: "Standby", tone: "neutral" };
+  return { key: "off", label: "Stopped", tone: "neutral" };
 }
 
 /** The badge; hovering it lists the apps attached to the server and which of them are using it. */

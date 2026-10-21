@@ -165,6 +165,12 @@ describe("the ChatGPT / Codex app", () => {
         expect(readFileSync(file, "utf-8").startsWith(SAMPLE)).toBe(true);
         expect(installServer("docs", ["ChatGPT / Codex"], BRIDGE, files)[0]!.status).toBe("already");
 
+        const viaHttp = installServer("web", ["ChatGPT / Codex"], BRIDGE, files, { http: { url: "http://127.0.0.1:47615/mcp/web", token: "tok" } })[0]!;
+        expect(viaHttp.status).toBe("added");
+        expect(readFileSync(file, "utf-8")).toContain('[mcp_servers.web]\nurl = "http://127.0.0.1:47615/mcp/web"\nhttp_headers = { Authorization = "Bearer tok" }');
+        expect(readCodexServers(readFileSync(file, "utf-8")).servers.web).toMatchObject({ url: "http://127.0.0.1:47615/mcp/web", headers: { Authorization: "Bearer tok" } });
+        expect(installServer("web", ["ChatGPT / Codex"], BRIDGE, files)[0]!.status).toBe("already");
+
         const migrated = migrateClientConfig("ChatGPT / Codex", { context7: "context7" }, BRIDGE, files);
         expect(migrated).toMatchObject({ status: "added", migrated: ["context7"] });
         expect(readFileSync(file, "utf-8")).toContain('args = ["context7"]');

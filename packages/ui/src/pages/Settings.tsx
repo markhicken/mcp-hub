@@ -67,7 +67,7 @@ export function SettingsPage({ snap, theme, setTheme, onIntro }: Props) {
         {s.allowTcpMcp && s.requireClientToken && (
           <Row label="Access token" hint="Included automatically in the snippets under Connect a client.">
             <div className="flex items-center gap-2">
-              <code className="rounded-md bg-surface-2 px-2 py-1 font-mono text-xs">{reveal ? s.clientToken : "•".repeat(16)}</code>
+              <code style={{ width: `calc(${s.clientToken.length}ch + 1rem)` }} className="inline-block max-w-full shrink-0 truncate rounded-md bg-surface-2 px-2 py-1 font-mono text-xs">{reveal ? s.clientToken : "•".repeat(s.clientToken.length)}</code>
               <Button size="sm" variant="ghost" aria-label={reveal ? "Hide token" : "Reveal token"} onClick={() => setReveal((r) => !r)}>{reveal ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</Button>
               <CopyButton text={s.clientToken} />
               <Button size="sm" onClick={async () => { await api("POST", "/api/settings/rotate-client-token"); toast("New token generated. Update your clients."); }}><RefreshCw className="size-3.5" /> Rotate</Button>

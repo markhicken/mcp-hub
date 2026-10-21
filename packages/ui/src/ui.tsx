@@ -305,10 +305,11 @@ export function CopyButton({ text, label = "Copy", size = "sm" }: { text: string
   );
 }
 
-export function CodeBlock({ code }: { code: string }) {
+/** `shown` is what's displayed when it differs from what's copied (a masked secret). */
+export function CodeBlock({ code, shown }: { code: string; shown?: string }) {
   return (
     <div className="relative">
-      <pre className="overflow-x-auto rounded-lg border border-border bg-surface-2 p-3 pr-20 font-mono text-xs leading-relaxed">{code}</pre>
+      <pre className="overflow-x-auto rounded-lg border border-border bg-surface-2 p-3 pr-20 font-mono text-xs leading-relaxed">{shown ?? code}</pre>
       <div className="absolute right-2 top-2">
         <CopyButton text={code} />
       </div>

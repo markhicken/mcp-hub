@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { addServerToConfig, backupFile, bridgeEntry, installServer, installServers, migrateConfigText, previewInstall, previewInstallServers } from "../src/install.js";
+import { addServerToConfig, backupFile, bridgeEntry, httpEntry, installServer, installServers, migrateConfigText, previewInstall, previewInstallServers } from "../src/install.js";
 import type { ClientConfigFile } from "../src/import.js";
 import { startHub } from "./helpers.js";
 
@@ -108,6 +108,20 @@ describe("editing a config in place", () => {
     expect(bridgeEntry("Claude Desktop", BRIDGE, "docs")).toEqual({ command: BRIDGE.command, args: ["docs"] });
     expect(bridgeEntry("GitHub Copilot CLI", BRIDGE, "docs")).toMatchObject({ type: "local", tools: ["*"] });
     expect(bridgeEntry("VS Code", BRIDGE, "docs")).toMatchObject({ type: "stdio" });
+  });
+
+  it("installs the direct HTTP endpoint instead of the bridge when asked", () => {
+    const http = { url: "http://127.0.0.1:47615/mcp/docs", token: "tok" };
+    expect(httpEntry("Cursor", http)).toEqual({ url: http.url, headers: { Authorization: "Bearer tok" } });
+    expect(httpEntry("VS Code", { url: http.url })).toEqual({ type: "http", url: http.url });
+    expect(httpEntry("GitHub Copilot CLI", http)).toMatchObject({ type: "http", url: http.url, tools: ["*"] });
+    expect(httpEntry("Claude Desktop", http)).toMatchObject({ command: "npx", args: expect.arrayContaining(["mcp-remote", http.url]), env: { MCP_HUB_AUTH: "Bearer tok" } });
+    const out = addServerToConfig("{}", "mcpServers", "docs", httpEntry("Cursor", http));
+    expect(JSON.parse(out.text!).mcpServers.docs.url).toBe(http.url);
+    // The same server reached either way counts as already installed.
+    expect(addServerToConfig(out.text!, "mcpServers", "docs", entry).status).toBe("already");
+    const desktop = addServerToConfig("{}", "mcpServers", "docs", httpEntry("Claude Desktop", http));
+    expect(addServerToConfig(desktop.text!, "mcpServers", "docs", entry).status).toBe("already");
   });
 });
 
@@ -306,6 +320,19 @@ describe("installing into files", () => {
       expect(ok.body.results[0]).toMatchObject({ client: "Cursor", status: "added" });
       expect(ok.body.results[0].backup.startsWith(realpathSync(join(home, ".cursor", "mcp.json")) + ".mcp-hub-backup-")).toBe(true);
       expect(JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf-8")).mcpServers.docs.args).toEqual(["docs"]);
+
+      // Direct HTTP: refused while the hub doesn't allow it, otherwise the entry points at the hub's URL (with the token if one is required).
+      writeFileSync(join(home, ".cursor", "mcp.json"), original);
+      expect((await t.api("POST", "/api/servers/docs/install", { clients: ["Cursor"], transport: "ftp" })).status).toBe(400);
+      await t.api("PUT", "/api/settings", { allowTcpMcp: false });
+      expect((await t.api("POST", "/api/servers/docs/install", { clients: ["Cursor"], transport: "http" })).status).toBe(400);
+      await t.api("PUT", "/api/settings", { allowTcpMcp: true, requireClientToken: true });
+      const viaHttp = await t.api("POST", "/api/servers/docs/install", { clients: ["Cursor"], transport: "http" });
+      expect(viaHttp.body.results[0].status).toBe("added");
+      const entryHttp = JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf-8")).mcpServers.docs;
+      expect(entryHttp.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp\/docs$/);
+      expect(entryHttp.headers.Authorization).toMatch(/^Bearer .+/);
+      await t.api("PUT", "/api/settings", { requireClientToken: false });
 
       // Several servers at once: validated, previewed, then installed into the one file.
       await t.api("POST", "/api/servers", { name: "Wiki", transport: "http", url: "https://example.com/wiki", enabled: false });

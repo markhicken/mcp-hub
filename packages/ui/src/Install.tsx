@@ -2,7 +2,7 @@ import { AlertTriangle, Check, CircleSlash, Minus, PackagePlus } from "lucide-re
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { AppInstallPreview, AppInstallResult, InstallPreview as Preview, InstallResult as Result, ServerStatus, Snapshot } from "./types";
-import { Button, Dialog, PathLink, cx, useToast } from "./ui";
+import { Button, Dialog, PathLink, Segmented, cx, useToast } from "./ui";
 
 
 const LOOK: Record<Result["status"], { icon: typeof Check; tone: string; label: string }> = {
@@ -29,24 +29,30 @@ const PLAN: Record<Preview["status"], string> = {
  * If the app already has an entry for the same MCP, the dialog lists it and says it will be replaced; the file is
  * backed up first either way.
  */
-export function InstallDialog({ server, client, onClose }: { server: ServerStatus; client: string; onClose: () => void }) {
+export function InstallDialog({ server, client, snap, onClose }: { server: ServerStatus; client: string; snap: Snapshot; onClose: () => void }) {
   const toast = useToast();
   const [plan, setPlan] = useState<Preview | null>(null);
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
+  const canBridge = !!snap.shim;
+  const canHttp = snap.settings.allowTcpMcp;
+  const [transport, setTransport] = useState<"bridge" | "http">(canBridge ? "bridge" : "http");
   const url = `/api/servers/${encodeURIComponent(server.id)}/install`;
 
   useEffect(() => {
-    api<{ preview: Preview[] }>("POST", url, { clients: [client], dryRun: true }).then(
-      (r) => setPlan(r.preview[0] ?? null),
+    let current = true;
+    setPlan(null);
+    api<{ preview: Preview[] }>("POST", url, { clients: [client], dryRun: true, transport }).then(
+      (r) => current && setPlan(r.preview[0] ?? null),
       (e) => toast((e as Error).message, "error"),
     );
-  }, []);
+    return () => { current = false; };
+  }, [transport]);
 
   const run = async () => {
     setBusy(true);
     try {
-      const r = await api<{ results: Result[] }>("POST", url, { clients: [client], replace: plan?.status === "replace" });
+      const r = await api<{ results: Result[] }>("POST", url, { clients: [client], replace: plan?.status === "replace", transport });
       setResult(r.results[0] ?? null);
     } catch (e) {
       toast((e as Error).message, "error");
@@ -75,6 +81,16 @@ export function InstallDialog({ server, client, onClose }: { server: ServerStatu
         )
       }
     >
+      {canBridge && canHttp && !result && (
+        <div className="mb-3 space-y-1.5">
+          <Segmented value={transport} onChange={setTransport} options={[{ value: "bridge", label: "Local bridge (recommended)" }, { value: "http", label: "Direct HTTP" }]} />
+          <p className="text-xs text-muted">
+            {transport === "bridge"
+              ? "The app launches the MCP Hub bridge, and MCP Hub asks you once before letting it in."
+              : `The app connects straight to the hub's HTTP address with no approval step${snap.settings.requireClientToken ? "; the access token is written into the app's config file" : ""}. Any program on this Mac can do the same.`}
+          </p>
+        </div>
+      )}
       {!plan ? (
         <p className="text-sm text-muted">Checking {client}'s config…</p>
       ) : result && look && Icon ? (

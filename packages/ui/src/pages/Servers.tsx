@@ -282,7 +282,6 @@ function Overview({ s, onEdit, onConnectClient, onSignIn }: { s: ServerStatus; o
         <Button onClick={onEdit}>Edit</Button>
         {s.state === "needs-auth" && <Button onClick={onSignIn}><LogIn className="size-4" /> Sign in</Button>}
         {s.config.auth === "oauth" && s.state === "connected" && <Button onClick={() => api("POST", `/api/servers/${s.id}/signout`)}>Sign out</Button>}
-        <CopyButton text={s.mcpUrl} label="Copy URL" size="md" />
       </div>
     </div>
   );

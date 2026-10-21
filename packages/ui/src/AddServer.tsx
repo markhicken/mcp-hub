@@ -231,8 +231,8 @@ export function AddServerDialog({ existing, onClose }: Props) {
             <div className="flex flex-wrap items-center gap-3">
               <Segmented value={lifecycle} onChange={setLifecycle} options={[{ value: "keep-alive", label: "Always on" }, { value: "on-demand", label: "Start when needed" }]} />
               {lifecycle === "on-demand" && (
-                <label className="flex items-center gap-2 text-xs text-muted">
-                  Stop after <Input value={idle} onChange={(e) => setIdle(e.target.value)} className="h-8 w-16" inputMode="numeric" /> idle minutes
+                <label className="flex items-center gap-2 whitespace-nowrap text-xs text-muted">
+                  Stop after <Input value={idle} onChange={(e) => setIdle(e.target.value.replace(/\D/g, ""))} className="h-8 px-2 text-center" style={{ width: "4rem" }} inputMode="numeric" maxLength={5} /> idle minutes
                 </label>
               )}
             </div>

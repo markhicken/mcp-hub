@@ -44,6 +44,39 @@ export function bridgeEntry(client: string, bridge: { command: string; args: str
   return base;
 }
 
+/** Where an app reaches the hub's HTTP endpoint directly (no bridge, no approval); `token` is set when the hub requires one. */
+export interface HttpTarget {
+  url: string;
+  token?: string;
+}
+
+/** The entry that makes an app talk to one server over the hub's HTTP endpoint instead of the bridge. */
+export function httpEntry(client: string, http: HttpTarget): Raw {
+  const headers = http.token ? { Authorization: `Bearer ${http.token}` } : undefined;
+  switch (client) {
+    // Claude Desktop only launches local programs; mcp-remote turns the URL into one.
+    case "Claude Desktop":
+      return {
+        command: "npx",
+        args: ["-y", "mcp-remote", http.url, "--allow-http", ...(headers ? ["--header", "Authorization:${MCP_HUB_AUTH}"] : [])],
+        ...(headers ? { env: { MCP_HUB_AUTH: headers.Authorization } } : {}),
+      };
+    case "ChatGPT / Codex":
+      return { url: http.url, ...(headers ? { http_headers: headers } : {}) };
+    case "Cursor":
+      return { url: http.url, ...(headers ? { headers } : {}) };
+    case "GitHub Copilot CLI":
+      return { type: "http", url: http.url, ...(headers ? { headers } : {}), tools: ["*"] };
+    default:
+      return { type: "http", url: http.url, ...(headers ? { headers } : {}) };
+  }
+}
+
+/** The entry to install: the bridge, or the direct HTTP endpoint when `http` is given. */
+function entryFor(client: string, bridge: { command: string; args: string[] }, serverId: string, http?: HttpTarget): Raw {
+  return http ? httpEntry(client, http) : bridgeEntry(client, bridge, serverId);
+}
+
 export interface EditOutcome {
   status: "added" | "already" | "conflict" | "error";
   text?: string;
@@ -122,7 +155,8 @@ function isHubEntryFor(raw: unknown, serverId: string): boolean {
   const r = raw as Raw;
   if (!pointsAtHub(r)) return false;
   const args: unknown[] = Array.isArray(r.args) ? r.args : [];
-  return args[args.length - 1] === serverId || (typeof r.url === "string" && r.url.endsWith(`/mcp/${serverId}`));
+  const viaUrl = (v: unknown): boolean => typeof v === "string" && v.endsWith(`/mcp/${serverId}`);
+  return args[args.length - 1] === serverId || viaUrl(r.url) || args.some(viaUrl);
 }
 
 /**
@@ -266,10 +300,10 @@ interface Plan {
 }
 
 /** `text` stands in for the file's content, so several servers can be planned one after another before anything is written. */
-function planInstall(serverId: string, file: ClientConfigFile, bridge: { command: string; args: string[] }, text?: string): Plan {
+function planInstall(serverId: string, file: ClientConfigFile, bridge: { command: string; args: string[] }, text?: string, http?: HttpTarget): Plan {
   if (!existsSync(file.path)) return { status: "no-file", message: "No config file found. Open the app once so it creates one, or use the snippet under Connect a client.", existing: [] };
   const before = text ?? readFileSync(file.path, "utf-8");
-  const entry = bridgeEntry(file.client, bridge, serverId);
+  const entry = entryFor(file.client, bridge, serverId, http);
   const out = file.format === "toml" ? addCodexServer(before, serverId, entry) : addServerToConfig(before, file.key, serverId, entry);
   if (out.status === "already" || out.status === "error") return { status: out.status, message: out.message, existing: [], before };
   const { existing } = findExisting(file, before, serverId);
@@ -287,12 +321,13 @@ export function previewInstall(
   clients: string[],
   bridge: { command: string; args: string[] },
   files: ClientConfigFile[] = candidatePaths(),
+  options: { http?: HttpTarget } = {},
 ): InstallPreview[] {
   return clients.map((client): InstallPreview => {
     const file = files.find((f) => f.client === client);
     if (!file) return { client, path: "", status: "error", message: "Unknown app.", existing: [] };
     try {
-      const { status, message, existing } = planInstall(serverId, file, bridge);
+      const { status, message, existing } = planInstall(serverId, file, bridge, undefined, options.http);
       return { client, path: file.path, status, message, existing };
     } catch (err) {
       return { client, path: file.path, status: "error", message: (err as Error).message, existing: [] };
@@ -310,15 +345,15 @@ export function installServer(
   clients: string[],
   bridge: { command: string; args: string[] },
   files: ClientConfigFile[] = candidatePaths(),
-  options: { replace?: boolean } = {},
+  options: { replace?: boolean; http?: HttpTarget } = {},
 ): InstallResult[] {
   return clients.map((client): InstallResult => {
     const file = files.find((f) => f.client === client);
     if (!file) return { client, path: "", status: "error", message: "Unknown app." };
     const done = (status: InstallStatus, message: string, backup?: string): InstallResult => ({ client, path: file.path, status, message, ...(backup ? { backup } : {}) });
     try {
-      const plan = planInstall(serverId, file, bridge);
-      const step = applyPlan(plan, file, bridge, serverId, options.replace === true);
+      const plan = planInstall(serverId, file, bridge, undefined, options.http);
+      const step = applyPlan(plan, file, bridge, serverId, options.replace === true, options.http);
       if (step.text === undefined) return done(step.status, step.message);
       // Keep a copy of the file as it is now. If that fails, nothing is changed.
       const backup = backupFile(file.path);
@@ -333,10 +368,10 @@ export function installServer(
 }
 
 /** What one plan turns into: the new file text if it can go ahead, otherwise why not. */
-function applyPlan(plan: Plan, file: ClientConfigFile, bridge: { command: string; args: string[] }, serverId: string, replace: boolean): { status: InstallStatus; message: string; text?: string } {
+function applyPlan(plan: Plan, file: ClientConfigFile, bridge: { command: string; args: string[] }, serverId: string, replace: boolean, http?: HttpTarget): { status: InstallStatus; message: string; text?: string } {
   if (plan.status === "add") return { status: "added", message: "Added. Restart the app to pick it up.", text: plan.addText! };
   if (plan.status === "replace" && replace) {
-    const entry = bridgeEntry(file.client, bridge, serverId);
+    const entry = entryFor(file.client, bridge, serverId, http);
     const swap = Object.fromEntries(plan.existing.map((e) => [e.key, entry]));
     const out = file.format === "toml" ? migrateCodexText(plan.before!, swap) : migrateConfigText(plan.before!, swap);
     const why = out.skipped.map((s) => s.reason).join(" ");

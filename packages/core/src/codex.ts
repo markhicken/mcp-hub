@@ -55,9 +55,15 @@ export function readCodexServers(text: string): { servers: Record<string, Raw>; 
 const bareKey = /^[A-Za-z0-9_-]+$/;
 const tomlKey = (k: string): string => (bareKey.test(k) ? k : JSON.stringify(k));
 
+/** Strings and arrays are written as JSON (valid TOML); a flat object becomes an inline table. */
+function tomlValue(v: unknown): string {
+  if (v && typeof v === "object" && !Array.isArray(v)) return `{ ${Object.entries(v).map(([k, x]) => `${tomlKey(k)} = ${JSON.stringify(x)}`).join(", ")} }`;
+  return JSON.stringify(v);
+}
+
 function tomlTable(name: string, entry: Raw, eol: string): string {
   const lines = [`[mcp_servers.${tomlKey(name)}]`];
-  for (const [k, v] of Object.entries(entry)) lines.push(`${k} = ${JSON.stringify(v)}`);
+  for (const [k, v] of Object.entries(entry)) lines.push(`${k} = ${tomlValue(v)}`);
   return lines.join(eol) + eol;
 }
 
@@ -90,12 +96,13 @@ export function addCodexServer(input: string, serverId: string, entry: Raw): Cod
     const raw = toRaw((t ?? {}) as Raw);
     const hub = pointsAtHub(raw);
     const lastArg = Array.isArray(raw.args) ? raw.args[raw.args.length - 1] : undefined;
+    const isThis = lastArg === serverId || (typeof raw.url === "string" && raw.url.endsWith(`/mcp/${serverId}`));
     if (k === serverId) {
-      return hub && lastArg === serverId
+      return hub && isThis
         ? { status: "already", message: "Already set up to use MCP Hub." }
         : { status: "conflict", message: `A different server named "${serverId}" is already there. Remove or rename it, then install again.` };
     }
-    if (hub && lastArg === serverId) return { status: "already", message: `Already set up to use MCP Hub (as "${k}").` };
+    if (hub && isThis) return { status: "already", message: `Already set up to use MCP Hub (as "${k}").` };
   }
 
   const eol = eolOf(text);

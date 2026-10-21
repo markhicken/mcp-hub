@@ -20,7 +20,8 @@ const artifacts = [
   ["appimage", ".AppImage"],
 ];
 
-rmSync(out, { recursive: true, force: true });
+// Finder or Spotlight can add a file (.DS_Store) mid-delete, which fails with ENOTEMPTY; retry.
+rmSync(out, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 mkdirSync(out, { recursive: true });
 
 const copied = [];
