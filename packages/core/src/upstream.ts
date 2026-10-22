@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { LATEST_PROTOCOL_VERSION, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
@@ -12,6 +12,7 @@ import { CredentialError } from "./credentials/types.js";
 import { LogBuffer } from "./logs.js";
 import type { Metrics } from "./metrics.js";
 import { HubOAuthProvider } from "./oauth.js";
+import { mergeEnv } from "./system.js";
 import type { ClientRef, ConnectionState, CredentialState, ServerClient, ServerConfig, ServerStatus } from "./types.js";
 import { VERSION } from "./version.js";
 
@@ -376,6 +377,16 @@ export class UpstreamConnection extends EventEmitter {
     return { command, cwd, url, args, env, headers, clientSecret };
   }
 
+  /**
+   * The environment a stdio server starts with. On Windows the SDK adds its own default variables (`PATH`, `SYSTEMROOT`
+   * …) in upper case, so ours are merged case-insensitively onto those first; otherwise the child could get `Path`
+   * and `PATH` both and see either.
+   */
+  private childEnv(extra: Record<string, string>): NodeJS.ProcessEnv {
+    if (process.platform !== "win32") return { ...this.deps.baseEnv(), ...extra };
+    return mergeEnv(getDefaultEnvironment(), mergeEnv(this.deps.baseEnv(), extra));
+  }
+
   private createTransport(r: Resolved): Transport {
     const cfg = this.config;
     if (cfg.transport === "stdio") {
@@ -383,7 +394,7 @@ export class UpstreamConnection extends EventEmitter {
         command: r.command,
         args: r.args,
         cwd: r.cwd || undefined,
-        env: { ...this.deps.baseEnv(), ...r.env } as Record<string, string>,
+        env: this.childEnv(r.env) as Record<string, string>,
         stderr: "pipe",
       });
       t.stderr?.on("data", (d: Buffer) => {
@@ -609,7 +620,7 @@ export class UpstreamConnection extends EventEmitter {
     if (t) {
       t.onclose = undefined;
       // Whatever the server started (an npx wrapper's real server) is found now, before closing orphans it.
-      const family = t instanceof StdioClientTransport && t.pid ? descendantsOf(t.pid) : [];
+      const family = t instanceof StdioClientTransport && t.pid ? await descendantsOf(t.pid) : [];
       try {
         await t.close();
       } catch {

@@ -353,6 +353,103 @@ describe("installing into files", () => {
   });
 });
 
+describe("creating a config file that doesn't exist", () => {
+  const dir = mkdtempSync(join(tmpdir(), "mcp-hub-create-"));
+  const cursor = (name: string): ClientConfigFile => ({ client: "Cursor", path: join(dir, name, "mcp.json"), shape: "mcpServers", key: "mcpServers" });
+  const codex = (name: string): ClientConfigFile => ({ client: "ChatGPT / Codex", path: join(dir, name, "config.toml"), shape: "mcpServers", key: "mcp_servers", format: "toml" });
+
+  it("leaves a missing file alone unless asked, and says if the app's folder isn't there either", () => {
+    const f = cursor("not-installed");
+    const p = previewInstall("docs", ["Cursor"], BRIDGE, [f])[0]!;
+    expect(p.status).toBe("no-file");
+    expect(p.message).toMatch(/may not be installed/);
+    expect(installServer("docs", ["Cursor"], BRIDGE, [f])[0]!.status).toBe("no-file");
+    mkdirSync(join(dir, "has-folder"));
+    expect(previewInstall("docs", ["Cursor"], BRIDGE, [cursor("has-folder")])[0]!.message).toBe("No config file found.");
+    expect(readdirSync(dir)).not.toContain("not-installed");
+  });
+
+  it("previews the creation without making anything, then creates the file (and folder) with just that server", () => {
+    const f = cursor("new-app");
+    const p = previewInstall("docs", ["Cursor"], BRIDGE, [f], { create: true })[0]!;
+    expect(p).toMatchObject({ status: "add", message: "The config file will be created with this server in it." });
+    expect(readdirSync(dir)).not.toContain("new-app");
+
+    const r = installServer("docs", ["Cursor"], BRIDGE, [f], { create: true })[0]!;
+    expect(r).toMatchObject({ status: "added", created: true });
+    expect(r.backup).toBeUndefined();
+    expect(JSON.parse(readFileSync(f.path, "utf-8"))).toEqual({ mcpServers: { docs: { command: BRIDGE.command, args: ["docs"] } } });
+    // POSIX permission bits don't exist on Windows (the profile's ACLs protect the file there).
+    if (process.platform !== "win32") expect(statSync(f.path).mode & 0o777).toBe(0o600);
+
+    // Now the file exists: a second install is an ordinary edit with a backup, not a creation.
+    const again = installServer("wiki", ["Cursor"], BRIDGE, [f], { create: true })[0]!;
+    expect(again.created).toBeUndefined();
+    expect(again.backup).toBeDefined();
+    expect(Object.keys(JSON.parse(readFileSync(f.path, "utf-8")).mcpServers)).toEqual(["docs", "wiki"]);
+  });
+
+  it("creates a TOML config for Codex", () => {
+    const f = codex("codex-home");
+    const r = installServer("docs", ["ChatGPT / Codex"], BRIDGE, [f], { create: true })[0]!;
+    expect(r).toMatchObject({ status: "added", created: true });
+    expect(readFileSync(f.path, "utf-8")).toMatch(/\[mcp_servers\.docs\]/);
+  });
+
+  it("creates the file once for several servers", () => {
+    const f = cursor("batch-new");
+    const none = installServers(["docs", "wiki"], "Cursor", BRIDGE, [f]);
+    expect(none.servers.map((s) => s.status)).toEqual(["no-file", "no-file"]);
+    expect(previewInstallServers(["docs", "wiki"], "Cursor", BRIDGE, [f], { create: true }).servers.map((s) => s.status)).toEqual(["add", "add"]);
+    const r = installServers(["docs", "wiki"], "Cursor", BRIDGE, [f], { create: true });
+    expect(r).toMatchObject({ created: true });
+    expect(r.backup).toBeUndefined();
+    expect(r.servers.map((s) => s.status)).toEqual(["added", "added"]);
+    expect(Object.keys(JSON.parse(readFileSync(f.path, "utf-8")).mcpServers)).toEqual(["docs", "wiki"]);
+  });
+
+  it("edits a file that already exists in the ordinary way, even when creation was allowed", () => {
+    const f = cursor("exists");
+    mkdirSync(join(dir, "exists"));
+    writeFileSync(f.path, '{"mine":true}');
+    const r = installServer("docs", ["Cursor"], BRIDGE, [f], { create: true })[0]!;
+    expect(r.created).toBeUndefined();
+    expect(r.backup).toBeDefined();
+    expect(JSON.parse(readFileSync(f.path, "utf-8")).mine).toBe(true);
+  });
+
+  it("is available over the API only when asked for", async () => {
+    const home = mkdtempSync(join(tmpdir(), "mcp-hub-home-"));
+    const saved = process.env.HOME;
+    process.env.HOME = home;
+    const t = await startHub({}, { shim: BRIDGE });
+    try {
+      await t.api("POST", "/api/servers", { name: "Docs", transport: "http", url: "https://example.com/mcp", enabled: false });
+      const file = join(home, ".cursor", "mcp.json");
+      expect((await t.api("POST", "/api/servers/docs/install", { clients: ["Cursor"], create: "yes" })).status).toBe(400);
+      expect((await t.api("POST", "/api/install", { client: "Cursor", servers: ["docs"], create: 1 })).status).toBe(400);
+
+      expect((await t.api("POST", "/api/servers/docs/install", { clients: ["Cursor"], dryRun: true })).body.preview[0].status).toBe("no-file");
+      expect((await t.api("POST", "/api/servers/docs/install", { clients: ["Cursor"] })).body.results[0].status).toBe("no-file");
+      expect((await t.api("POST", "/api/servers/docs/install", { clients: ["Cursor"], dryRun: true, create: true })).body.preview[0].status).toBe("add");
+      expect(() => readFileSync(file)).toThrow();
+
+      const made = await t.api("POST", "/api/servers/docs/install", { clients: ["Cursor"], create: true });
+      expect(made.body.results[0]).toMatchObject({ status: "added", created: true });
+      expect(JSON.parse(readFileSync(file, "utf-8")).mcpServers.docs.args).toEqual(["docs"]);
+
+      await t.api("POST", "/api/servers", { name: "Wiki", transport: "http", url: "https://example.com/wiki", enabled: false });
+      const other = join(home, ".copilot", "mcp-config.json");
+      const many = await t.api("POST", "/api/install", { client: "GitHub Copilot CLI", servers: ["docs", "wiki"], create: true });
+      expect(many.body.result).toMatchObject({ created: true, path: other });
+      expect(Object.keys(JSON.parse(readFileSync(other, "utf-8")).mcpServers)).toEqual(["docs", "wiki"]);
+    } finally {
+      process.env.HOME = saved;
+      await t.stop();
+    }
+  });
+});
+
 describe("migrating existing entries", () => {
   const plan = { Acme_Wiki: { command: BRIDGE.command, args: ["acme-wiki"] } };
 

@@ -87,7 +87,8 @@ describe("1Password CLI installer", () => {
 });
 
 describe("installing the CLI from the app", () => {
-  it("installs, points the 1Password source at it, and shares one download between simultaneous requests", async () => {
+  // The fake `op` is a shebang script, which Windows can't run directly.
+  it.skipIf(process.platform === "win32")("installs, points the 1Password source at it, and shares one download between simultaneous requests", async () => {
     let calls = 0;
     const fake = join(import.meta.dirname, "fixtures", "fake-op.mjs");
     chmodSync(fake, 0o755);
@@ -105,6 +106,8 @@ describe("installing the CLI from the app", () => {
       expect(calls).toBe(1);
       const src = (await t.api("GET", "/api/state")).body.sources.find((s: { type: string }) => s.type === "1password");
       expect(src.options.opPath).toBe(fake);
+      // 1Password starts out off; its setup is only checked once it is switched on.
+      await t.api("PUT", "/api/sources/1password", { enabled: true });
       const status = (await t.api("GET", "/api/credentials/setup")).body.statuses.find((s: { type: string }) => s.type === "1password");
       expect(status).toMatchObject({ ready: true, version: "2.30.0" });
     } finally {

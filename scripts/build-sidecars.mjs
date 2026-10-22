@@ -42,11 +42,26 @@ function load(fromPackageJson, name, hint) {
 const esbuild = load(join(root, "packages/core/package.json"), "esbuild", "devDependency of @mcp-hub/core");
 const { inject } = load(join(desktop, "package.json"), "postject", "devDependency of @mcp-hub/desktop");
 
-const triple = /^host:\s*(\S+)/m.exec(execFileSync("rustc", ["-vV"], { encoding: "utf8" }))?.[1];
-if (!triple) fail("could not determine the Rust host target triple from `rustc -vV`");
 const isWin = process.platform === "win32";
 const isMac = process.platform === "darwin";
 const ext = isWin ? ".exe" : "";
+
+/** The Rust target triple Tauri names sidecars by. Normally `rustc` says; without it, the usual one for this system. */
+function hostTriple() {
+  try {
+    const t = /^host:\s*(\S+)/m.exec(execFileSync("rustc", ["-vV"], { encoding: "utf8" }))?.[1];
+    if (t) return t;
+  } catch {
+    // no Rust toolchain: fall through
+  }
+  const arch = { x64: "x86_64", arm64: "aarch64" }[process.arch];
+  if (!arch) return undefined;
+  if (isWin) return `${arch}-pc-windows-msvc`;
+  if (isMac) return `${arch}-apple-darwin`;
+  return `${arch}-unknown-linux-gnu`;
+}
+const triple = hostTriple();
+if (!triple) fail("could not determine the Rust host target triple (install Rust, or build on x64/arm64)");
 
 // Fixed sentinel defined by Node's SEA implementation.
 const SEA_FUSE = "NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2";
@@ -86,8 +101,18 @@ function smokeTest(name, exe) {
       clearTimeout(timer);
       child.stdin.end();
       child.kill();
-      rmSync(home, { recursive: true, force: true });
-      error ? reject(error) : done();
+      // Windows keeps a killed program's files locked for a moment (its database), so wait for it to exit and retry;
+      // a leftover temp folder must never fail the build.
+      const cleanup = () => {
+        try {
+          rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+        } catch {
+          // left in the temp folder
+        }
+        error ? reject(error) : done();
+      };
+      if (child.exitCode !== null || child.signalCode !== null) cleanup();
+      else child.once("exit", cleanup);
     };
     const timer = setTimeout(() => finish(new Error(`${name} did not start within 30s.\n${err}`)), 30_000);
     child.stdout.on("data", (d) => {
@@ -125,6 +150,15 @@ function buildSea(name, entry) {
     if (!isWin) chmodSync(out, 0o755);
     // The copied node binary is signed; injecting invalidates that signature.
     if (isMac) execFileSync("codesign", ["--remove-signature", out], { stdio: "inherit" });
+    if (isWin) {
+      // Best effort: signtool ships with the Windows SDK. Without it the executable keeps node.exe's (then invalid) signature,
+      // which still runs, but some antivirus tools dislike it.
+      try {
+        execFileSync("signtool", ["remove", "/s", out], { stdio: "ignore" });
+      } catch {
+        console.warn("signtool not found: the Node signature was left on the sidecar");
+      }
+    }
 
     await inject(out, "NODE_SEA_BLOB", readFileSync(blob), {
       sentinelFuse: SEA_FUSE,

@@ -191,6 +191,8 @@ export interface InstallResult {
   status: "added" | "replaced" | "already" | "conflict" | "no-file" | "error";
   message: string;
   backup?: string;
+  /** The config file didn't exist and was created for this install. */
+  created?: boolean;
 }
 
 /** What installing would do to one app's config, before anything is changed. */
@@ -215,7 +217,9 @@ export interface AppInstallResult {
   path: string;
   /** Copy of the file as it was before it changed; one for the whole batch. */
   backup?: string;
-  servers: Array<{ serverId: string; status: InstallResult["status"]; message: string }>;
+  /** The config file didn't exist and was created for this install (so there is no backup). */
+  created?: boolean;
+  servers: Array<{ serverId: string; status: InstallResult["status"]; message: string }>
 }
 
 export interface MigrateResponse {

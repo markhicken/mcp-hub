@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { renameWithRetry } from "./atomic-write.js";
 import { SecretBox } from "./credentials/box.js";
 
 export interface LogLine {
@@ -73,7 +74,7 @@ export class LogBuffer extends EventEmitter {
         mkdirSync(dirname(this.file), { recursive: true, mode: 0o700 });
         writeFileSync(this.file, "", { mode: 0o600 });
       } else if (statSync(this.file).size > MAX_FILE_BYTES) {
-        renameSync(this.file, `${this.file}.1`);
+        renameWithRetry(this.file, `${this.file}.1`);
         writeFileSync(this.file, "", { mode: 0o600 });
       }
       appendFileSync(this.file, JSON.stringify(line) + "\n");

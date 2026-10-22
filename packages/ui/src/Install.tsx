@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, CircleSlash, Minus, PackagePlus } from "lucide-react";
+import { AlertTriangle, Check, CircleSlash, FilePlus, Minus, PackagePlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import type { AppInstallPreview, AppInstallResult, InstallPreview as Preview, InstallResult as Result, ServerStatus, Snapshot } from "./types";
@@ -19,7 +19,7 @@ const PLAN: Record<Preview["status"], string> = {
   replace: "Will be replaced",
   already: "No change: already set up",
   conflict: "Name in use",
-  "no-file": "No config file, skipped",
+  "no-file": "No config file yet",
   error: "Can't be changed",
 };
 
@@ -52,7 +52,7 @@ export function InstallDialog({ server, client, snap, onClose }: { server: Serve
   const run = async () => {
     setBusy(true);
     try {
-      const r = await api<{ results: Result[] }>("POST", url, { clients: [client], replace: plan?.status === "replace", transport });
+      const r = await api<{ results: Result[] }>("POST", url, { clients: [client], replace: plan?.status === "replace", create: plan?.status === "no-file", transport });
       setResult(r.results[0] ?? null);
     } catch (e) {
       toast((e as Error).message, "error");
@@ -62,6 +62,8 @@ export function InstallDialog({ server, client, snap, onClose }: { server: Serve
   };
 
   const go = plan?.status === "add" || plan?.status === "replace";
+  // A missing config file is only created after the user agrees, here: the button says so and the file is named above it.
+  const canCreate = plan?.status === "no-file";
   const look = result ? LOOK[result.status] : null;
   const Icon = look?.icon;
 
@@ -71,12 +73,12 @@ export function InstallDialog({ server, client, snap, onClose }: { server: Serve
       subtitle="Adds the MCP Hub version of this server to the app's config, so the app uses it through MCP Hub."
       onClose={onClose}
       footer={
-        result || (plan && !go) ? (
+        result || (plan && !go && !canCreate) ? (
           <Button variant="primary" onClick={onClose}>{result ? "Done" : "Close"}</Button>
         ) : (
           <>
             <Button variant="ghost" disabled={busy} onClick={onClose}>Cancel</Button>
-            <Button variant="primary" disabled={!go || busy} onClick={run}><PackagePlus className="size-4" /> {busy ? "Installing…" : plan?.status === "replace" ? "Back up and replace" : "Back up and install"}</Button>
+            <Button variant="primary" disabled={(!go && !canCreate) || busy} onClick={run}><PackagePlus className="size-4" /> {busy ? "Installing…" : canCreate ? "Create the file and install" : plan?.status === "replace" ? "Back up and replace" : "Back up and install"}</Button>
           </>
         )
       }
@@ -123,6 +125,11 @@ export function InstallDialog({ server, client, snap, onClose }: { server: Serve
             </div>
           )}
           {(plan.status === "conflict" || plan.status === "error" || plan.status === "no-file" || plan.status === "already") && <p className="text-xs text-muted">{plan.message}</p>}
+          {canCreate && (
+            <p className="text-xs text-muted">
+              MCP Hub can create the file at the path above, with just this server in it. Nothing else on your computer is touched, and the app will find the file the next time it starts.
+            </p>
+          )}
           {go && (
             <p className="text-xs text-muted">
               Only {plan.status === "replace" ? "that entry changes" : "a new entry is added"}. The rest of the file (formatting, comments, your other servers) is left exactly as it is, and the file is copied to a backup before it changes.
@@ -151,8 +158,9 @@ export function InstallInAppDialog({ client, snap, onClose, onDone }: { client: 
     setBusy(true);
     try {
       const r = await api<{ preview: AppInstallPreview }>("POST", "/api/install", { client, servers: [...picked], dryRun: true });
-      if (r.preview.servers.some((s) => s.status === "replace")) setReview(r.preview);
-      else await run(false);
+      // A missing config file or a same-named entry needs the user's say-so first; anything else installs straight away.
+      if (r.preview.servers.some((s) => s.status === "replace") || r.preview.servers.every((s) => s.status === "no-file")) setReview(r.preview);
+      else await run(false, false);
     } catch (e) {
       toast((e as Error).message, "error");
     } finally {
@@ -160,10 +168,10 @@ export function InstallInAppDialog({ client, snap, onClose, onDone }: { client: 
     }
   };
 
-  const run = async (replace: boolean) => {
+  const run = async (replace: boolean, create: boolean) => {
     setBusy(true);
     try {
-      const r = await api<{ result: AppInstallResult }>("POST", "/api/install", { client, servers: [...picked], replace });
+      const r = await api<{ result: AppInstallResult }>("POST", "/api/install", { client, servers: [...picked], replace, create });
       setResult(r.result);
       setReview(null);
       onDone();
@@ -175,6 +183,8 @@ export function InstallInAppDialog({ client, snap, onClose, onDone }: { client: 
   };
 
   const toggle = (id: string, on: boolean) => setPicked((p) => { const n = new Set(p); on ? n.add(id) : n.delete(id); return n; });
+  // The app has no config file yet: creating it is offered, never done silently.
+  const creating = !!review && review.servers.length > 0 && review.servers.every((s) => s.status === "no-file");
 
   return (
     <Dialog
@@ -187,7 +197,7 @@ export function InstallInAppDialog({ client, snap, onClose, onDone }: { client: 
         ) : review ? (
           <>
             <Button variant="ghost" disabled={busy} onClick={() => setReview(null)}>Back</Button>
-            <Button variant="primary" disabled={busy} onClick={() => run(true)}><PackagePlus className="size-4" /> {busy ? "Installing…" : "Back up and replace"}</Button>
+            <Button variant="primary" disabled={busy} onClick={() => (creating ? run(false, true) : run(true, false))}><PackagePlus className="size-4" /> {busy ? "Installing…" : creating ? "Create the file and install" : "Back up and replace"}</Button>
           </>
         ) : (
           <>
@@ -215,7 +225,22 @@ export function InstallInAppDialog({ client, snap, onClose, onDone }: { client: 
             })}
           </ul>
           <PathLink app={result.client} path={result.path} className="font-mono text-[11px] text-muted" />
+          {result.created && <p className="text-[11px] text-muted">The config file didn't exist, so it was created (there is no backup because there was nothing to back up).</p>}
           {result.backup && <p className="text-[11px] text-muted">Backup of the original: <PathLink app={result.client} backup wrap path={result.backup} className="font-mono" /></p>}
+        </div>
+      ) : review && creating ? (
+        <div className="space-y-3">
+          <div className="flex items-start gap-2 rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-xs">
+            <FilePlus className="mt-0.5 size-4 shrink-0 text-accent" />
+            <div className="space-y-1">
+              <p>{client} has no config file yet. MCP Hub can create it at the path below, with just {review.servers.length === 1 ? "this server" : "these servers"} in it. Nothing else on your computer is touched, and the app will find the file the next time it starts.</p>
+              {review.servers[0]?.message.includes("may not be installed") && <p className="text-muted">The app's folder doesn't exist either, so {client} may not be installed on this computer.</p>}
+            </div>
+          </div>
+          <ul className="divide-y divide-border rounded-xl border border-border">
+            {review.servers.map((s) => <li key={s.serverId} className="px-3 py-2.5 text-sm font-medium">{name(s.serverId)}</li>)}
+          </ul>
+          <PathLink app={review.client} path={review.path} className="font-mono text-[11px] text-muted" />
         </div>
       ) : review ? (
         <div className="space-y-3">

@@ -141,11 +141,11 @@ describe("Vault setup status", () => {
 });
 
 describe("Vault in the app", () => {
-  it("adds a Vault source automatically only for people who have VAULT_ADDR", async () => {
+  it("adds a Vault source (switched off) only for people who have VAULT_ADDR", async () => {
     const withAddr = await startHub({ VAULT_ADDR: "https://vault.example.com" });
     try {
       const s = (await withAddr.api("GET", "/api/state")).body.sources.find((x: { type: string }) => x.type === "vault");
-      expect(s).toMatchObject({ enabled: true, options: { tokenSource: "file" } });
+      expect(s).toMatchObject({ enabled: false, options: { tokenSource: "file" } });
       expect(s.options.address).toBeUndefined();
     } finally {
       await withAddr.stop();
@@ -161,7 +161,8 @@ describe("Vault in the app", () => {
     }
   });
 
-  it("signs in with the CLI, installs the CLI on request, and rejects bad input", async () => {
+  // The fake `vault` is a shebang script, which Windows can't run directly.
+  it.skipIf(process.platform === "win32")("signs in with the CLI, installs the CLI on request, and rejects bad input", async () => {
     const home = mkdtempSync(join(tmpdir(), "mcp-hub-vhome-"));
     const saved = process.env.HOME;
     process.env.HOME = home;

@@ -40,10 +40,24 @@ fn state(app: &AppHandle) -> tauri::State<'_, AppState> {
 // ---------------------------------------------------------------------------------------------
 // Daemon launch
 
+/// Is this the installed app rather than a cargo build run from the source tree (`tauri dev`)?
+/// A packaged build must use the bundled hub server: started from Finder or the Start menu it has no `node` on PATH,
+/// so the tsx dev path cannot work there.
+fn is_packaged(exe: &std::path::Path) -> bool {
+    let path = exe.to_string_lossy();
+    if path.contains(".app/Contents/") {
+        return true;
+    }
+    if cfg!(windows) {
+        // Cargo output lives in target\debug or target\release; an installed app (even a debug one) doesn't.
+        let lower = path.replace('/', "\\").to_lowercase();
+        return !(lower.contains("\\target\\debug\\") || lower.contains("\\target\\release\\"));
+    }
+    false
+}
+
 fn launch_spec(app: &AppHandle) -> Result<LaunchSpec, String> {
-    // A packaged .app (even a debug one) must use the bundled hub server: launched from Finder it has
-    // no `node` on PATH, so the tsx dev path cannot work there.
-    let packaged = std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/"));
+    let packaged = std::env::current_exe().is_ok_and(|p| is_packaged(&p));
     let dev = std::env::var("MCP_HUB_DEV_CORE").is_ok_and(|v| v == "1") || (cfg!(debug_assertions) && !packaged);
     if dev {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");

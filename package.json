@@ -21,7 +21,7 @@
     "test": "npm test --workspaces --if-present",
     "build:sidecars": "node scripts/build-sidecars.mjs",
     "build:app": "npm run build -w @mcp-hub/ui && npm run build:sidecars && node scripts/with-signing.mjs npm run build -w @mcp-hub/desktop && node scripts/collect-dist.mjs",
-    "build:app:debug": "npm run build -w @mcp-hub/ui && npm run build:sidecars && node scripts/with-signing.mjs npm run build -w @mcp-hub/desktop -- --debug --bundles app && node scripts/collect-dist.mjs --debug",
+    "build:app:debug": "node scripts/build-app-debug.mjs",
     "setup:signing": "node scripts/setup-signing.mjs"
   },
   "devDependencies": {

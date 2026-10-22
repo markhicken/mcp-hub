@@ -1,6 +1,11 @@
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { atomicWriteFileSync } from "../atomic-write.js";
+import { explainPowerShellFailure, powerShellArgs } from "../powershell.js";
 import { SecretBox } from "./box.js";
+import { DPAPI_PROTECT_SCRIPT, DPAPI_UNPROTECT_SCRIPT, NOT_FOUND, READ_SECRET_SCRIPT, WRITE_SECRET_SCRIPT } from "./wincred.js";
 
 const SERVICE = "MCP Hub";
 const ACCOUNT = "master-key";
@@ -81,10 +86,119 @@ function unsupported(): KeyStore {
   return { name: "OS key store", read: fail, write: fail };
 }
 
-/** The key store for this operating system. */
-export function osKeyStore(): KeyStore {
+const WIN_TARGET = "MCP Hub master key";
+
+/** Runs a PowerShell script synchronously; the key travels on stdin. Failures become KeyStoreErrors with the reason. */
+function powerShellSync(script: string, input?: string, env?: Record<string, string>): string {
+  try {
+    return execFileSync("powershell.exe", powerShellArgs(script), {
+      encoding: "utf8",
+      timeout: 30_000,
+      input: input ?? "",
+      env: { ...process.env, ...env },
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException & { status?: number; stderr?: string };
+    if (e.status === NOT_FOUND) throw Object.assign(new KeyStoreError("not found"), { notFound: true });
+    throw new KeyStoreError(e.code === "ENOENT" ? "PowerShell isn't available" : explainPowerShellFailure(String(e.stderr || e.message)));
+  }
+}
+
+const isNotFound = (err: unknown): boolean => (err as { notFound?: boolean }).notFound === true;
+
+/** Windows Credential Manager (a generic credential kept for this user on this machine). */
+export function windowsCredentialManager(run: typeof powerShellSync = powerShellSync): KeyStore {
+  const env = { HUB_TARGET: WIN_TARGET, HUB_USER: ACCOUNT };
+  return {
+    name: "Windows Credential Manager",
+    read() {
+      try {
+        return decode(run(READ_SECRET_SCRIPT, undefined, env));
+      } catch (err) {
+        if (isNotFound(err)) return null;
+        throw err;
+      }
+    },
+    write(key) {
+      run(WRITE_SECRET_SCRIPT, key.toString("base64"), env);
+    },
+  };
+}
+
+/** A file in the data directory sealed with DPAPI: only this Windows user can open it, and it needs no Credential Manager. */
+export function windowsDpapi(dir: string, run: typeof powerShellSync = powerShellSync): KeyStore {
+  const file = join(dir, "master-key.dpapi");
+  return {
+    name: "Windows DPAPI",
+    read() {
+      if (!existsSync(file)) return null;
+      return decode(run(DPAPI_UNPROTECT_SCRIPT, readFileSync(file, "utf8")));
+    },
+    write(key) {
+      mkdirSync(dir, { recursive: true });
+      atomicWriteFileSync(file, run(DPAPI_PROTECT_SCRIPT, key.toString("base64")).trim(), { mode: 0o600 });
+    },
+  };
+}
+
+/**
+ * Windows: Credential Manager, with a DPAPI file as the fallback where it can't be used (a locked-down PowerShell, a
+ * profile without a credential vault). The key is read from whichever holds it; it is written to the first that works.
+ */
+export function windowsKeyStore(dir?: string, stores: { credman?: KeyStore; dpapi?: KeyStore } = {}): KeyStore {
+  const credman = stores.credman ?? windowsCredentialManager();
+  const dpapi = stores.dpapi ?? (dir ? windowsDpapi(dir) : undefined);
+  let current: KeyStore = credman;
+  return {
+    get name() {
+      return current.name;
+    },
+    read() {
+      let failure: unknown;
+      try {
+        const key = credman.read();
+        if (key) {
+          current = credman;
+          return key;
+        }
+      } catch (err) {
+        failure = err;
+      }
+      if (dpapi) {
+        try {
+          const key = dpapi.read();
+          if (key) {
+            current = dpapi;
+            return key;
+          }
+        } catch (err) {
+          failure ??= err;
+        }
+      }
+      // Nothing saved anywhere that could be reached: that is only "no key yet" if every store answered.
+      if (failure && !dpapi) throw failure;
+      return null;
+    },
+    write(key) {
+      try {
+        credman.write(key);
+        current = credman;
+      } catch (err) {
+        if (!dpapi) throw err;
+        dpapi.write(key);
+        current = dpapi;
+      }
+    },
+  };
+}
+
+/** The key store for this operating system. `dir` is MCP Hub's data directory (Windows keeps its DPAPI fallback file there). */
+export function osKeyStore(dir?: string): KeyStore {
   if (process.platform === "darwin") return macKeychain();
   if (process.platform === "linux") return linuxSecretService();
+  if (process.platform === "win32") return windowsKeyStore(dir);
   return unsupported();
 }
 

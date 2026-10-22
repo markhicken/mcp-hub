@@ -7,6 +7,8 @@ export function pointsAtHub(raw: Raw): boolean {
     (s.includes("/mcp/") && (s.includes("127.0.0.1") || s.includes("localhost"))) ||
     s.includes("mcp-hub-stdio") ||
     s.includes("MCP Hub.app") ||
-    s.includes("mcp-hub/packages/shim")
+    s.includes("mcp-hub/packages/shim") ||
+    // The same dev path on Windows, as JSON writes it (every backslash doubled).
+    s.includes("mcp-hub\\\\packages\\\\shim")
   );
 }

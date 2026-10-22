@@ -1,5 +1,6 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { renameWithRetry } from "./atomic-write.js";
 import { isDeepStrictEqual } from "node:util";
 import { applyEdits, getNodeValue, parse, parseTree, type Edit, type Node, type ParseError } from "jsonc-parser";
 import { addCodexServer, migrateCodexText, readCodexServers } from "./codex.js";
@@ -15,6 +16,8 @@ export interface InstallResult {
   message: string;
   /** Copy of the file as it was before it was changed. */
   backup?: string;
+  /** The config file didn't exist and was created for this install. */
+  created?: boolean;
 }
 
 /** An entry already in an app's config that is the same MCP as the one being installed. */
@@ -220,7 +223,7 @@ function writeInPlace(path: string, text: string): void {
   const tmp = join(dirname(real), `.${Date.now()}.mcp-hub.tmp`);
   writeFileSync(tmp, text, { mode });
   chmodSync(tmp, mode);
-  renameSync(tmp, real);
+  renameWithRetry(tmp, real);
 }
 
 const KEEP_BACKUPS = 10;
@@ -297,12 +300,27 @@ interface Plan {
   before?: string;
   /** What the file becomes if the server is simply added. */
   addText?: string;
+  /** The file doesn't exist yet; installing creates it. */
+  created?: boolean;
 }
 
-/** `text` stands in for the file's content, so several servers can be planned one after another before anything is written. */
-function planInstall(serverId: string, file: ClientConfigFile, bridge: { command: string; args: string[] }, text?: string, http?: HttpTarget): Plan {
-  if (!existsSync(file.path)) return { status: "no-file", message: "No config file found. Open the app once so it creates one, or use the snippet under Connect a client.", existing: [] };
-  const before = text ?? readFileSync(file.path, "utf-8");
+const NO_FILE = (file: ClientConfigFile): string =>
+  `No config file found.${existsSync(dirname(file.path)) ? "" : " Its folder doesn't exist either, so the app may not be installed."}`;
+
+/** Creates a config file that doesn't exist yet (and its folder), private to the user. Fails if the file appears meanwhile. */
+function createConfigFile(path: string, text: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text, { mode: 0o600, flag: "wx" });
+}
+
+/**
+ * `text` stands in for the file's content, so several servers can be planned one after another before anything is written.
+ * With `create`, a missing file is planned as an empty one (installing then creates it); without it a missing file is "no-file".
+ */
+function planInstall(serverId: string, file: ClientConfigFile, bridge: { command: string; args: string[] }, text?: string, http?: HttpTarget, create = false): Plan {
+  const missing = !existsSync(file.path);
+  if (missing && !create) return { status: "no-file", message: NO_FILE(file), existing: [] };
+  const before = text ?? (missing ? "" : readFileSync(file.path, "utf-8"));
   const entry = entryFor(file.client, bridge, serverId, http);
   const out = file.format === "toml" ? addCodexServer(before, serverId, entry) : addServerToConfig(before, file.key, serverId, entry);
   if (out.status === "already" || out.status === "error") return { status: out.status, message: out.message, existing: [], before };
@@ -312,7 +330,7 @@ function planInstall(serverId: string, file: ClientConfigFile, bridge: { command
     return { status: "replace", message: `Already has ${keys}. Installing replaces ${existing.length === 1 ? "it" : "them"} with the MCP Hub version.`, existing, before };
   }
   if (out.status === "conflict") return { status: "conflict", message: out.message, existing: [], before };
-  return { status: "add", message: "Will be added.", existing: [], before, addText: out.text };
+  return { status: "add", message: missing ? "The config file will be created with this server in it." : "Will be added.", existing: [], before, addText: out.text, ...(missing ? { created: true } : {}) };
 }
 
 /** Works out what installing would do to each chosen app's config, without changing anything. */
@@ -321,13 +339,13 @@ export function previewInstall(
   clients: string[],
   bridge: { command: string; args: string[] },
   files: ClientConfigFile[] = candidatePaths(),
-  options: { http?: HttpTarget } = {},
+  options: { http?: HttpTarget; create?: boolean } = {},
 ): InstallPreview[] {
   return clients.map((client): InstallPreview => {
     const file = files.find((f) => f.client === client);
     if (!file) return { client, path: "", status: "error", message: "Unknown app.", existing: [] };
     try {
-      const { status, message, existing } = planInstall(serverId, file, bridge, undefined, options.http);
+      const { status, message, existing } = planInstall(serverId, file, bridge, undefined, options.http, options.create);
       return { client, path: file.path, status, message, existing };
     } catch (err) {
       return { client, path: file.path, status: "error", message: (err as Error).message, existing: [] };
@@ -338,23 +356,34 @@ export function previewInstall(
 /**
  * Adds the hub's version of a server to each chosen app's config. Only touches files for the apps named.
  * An entry that is already there under the same name is left alone unless `replace` is set; then it is
- * swapped for the hub's version under the same key, after the file is backed up.
+ * swapped for the hub's version under the same key, after the file is backed up. A config file that doesn't
+ * exist is only created when `create` is set.
  */
 export function installServer(
   serverId: string,
   clients: string[],
   bridge: { command: string; args: string[] },
   files: ClientConfigFile[] = candidatePaths(),
-  options: { replace?: boolean; http?: HttpTarget } = {},
+  options: { replace?: boolean; http?: HttpTarget; create?: boolean } = {},
 ): InstallResult[] {
   return clients.map((client): InstallResult => {
     const file = files.find((f) => f.client === client);
     if (!file) return { client, path: "", status: "error", message: "Unknown app." };
-    const done = (status: InstallStatus, message: string, backup?: string): InstallResult => ({ client, path: file.path, status, message, ...(backup ? { backup } : {}) });
+    const done = (status: InstallStatus, message: string, backup?: string, created?: boolean): InstallResult => ({ client, path: file.path, status, message, ...(backup ? { backup } : {}), ...(created ? { created } : {}) });
     try {
-      const plan = planInstall(serverId, file, bridge, undefined, options.http);
+      const plan = planInstall(serverId, file, bridge, undefined, options.http, options.create);
       const step = applyPlan(plan, file, bridge, serverId, options.replace === true, options.http);
       if (step.text === undefined) return done(step.status, step.message);
+      if (plan.created) {
+        // Nothing to back up. The file is only created if it still isn't there.
+        try {
+          createConfigFile(file.path, step.text);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EEXIST") return done("error", "The file appeared while installing. Try again.");
+          throw err;
+        }
+        return done(step.status, "Created the config file and added the server. Restart the app to pick it up.", undefined, true);
+      }
       // Keep a copy of the file as it is now. If that fails, nothing is changed.
       const backup = backupFile(file.path);
       // The app may be writing this file too; don't clobber a change that landed meanwhile.
@@ -403,6 +432,7 @@ export function previewInstallServers(
   client: string,
   bridge: { command: string; args: string[] },
   files: ClientConfigFile[] = candidatePaths(),
+  options: { create?: boolean } = {},
 ): { client: string; path: string; servers: ServerInstallPreview[] } {
   const file = files.find((f) => f.client === client);
   if (!file) return { client, path: "", servers: serverIds.map((serverId) => ({ serverId, status: "error", message: "Unknown app.", existing: [] })) };
@@ -411,7 +441,7 @@ export function previewInstallServers(
     path: file.path,
     servers: serverIds.map((serverId): ServerInstallPreview => {
       try {
-        const { status, message, existing } = planInstall(serverId, file, bridge);
+        const { status, message, existing } = planInstall(serverId, file, bridge, undefined, undefined, options.create);
         return { serverId, status, message, existing };
       } catch (err) {
         return { serverId, status: "error", message: (err as Error).message, existing: [] };
@@ -422,25 +452,27 @@ export function previewInstallServers(
 
 /**
  * Adds several servers to one app's config in a single edit: the file is read once, backed up once
- * and written once, so a failure leaves it untouched and one backup holds the original.
+ * and written once, so a failure leaves it untouched and one backup holds the original. A config file that
+ * doesn't exist is only created when `create` is set (then there is nothing to back up).
  */
 export function installServers(
   serverIds: string[],
   client: string,
   bridge: { command: string; args: string[] },
   files: ClientConfigFile[] = candidatePaths(),
-  options: { replace?: boolean } = {},
-): { client: string; path: string; backup?: string; servers: ServerInstallResult[] } {
+  options: { replace?: boolean; create?: boolean } = {},
+): { client: string; path: string; backup?: string; created?: boolean; servers: ServerInstallResult[] } {
   const file = files.find((f) => f.client === client);
   const all = (status: InstallStatus, message: string): ServerInstallResult[] => serverIds.map((serverId) => ({ serverId, status, message }));
   if (!file) return { client, path: "", servers: all("error", "Unknown app.") };
   try {
-    if (!existsSync(file.path)) return { client, path: file.path, servers: all("no-file", planInstall("", file, bridge).message) };
-    const original = readFileSync(file.path, "utf-8");
+    const missing = !existsSync(file.path);
+    if (missing && !options.create) return { client, path: file.path, servers: all("no-file", NO_FILE(file)) };
+    const original = missing ? "" : readFileSync(file.path, "utf-8");
     let text = original;
     const servers = serverIds.map((serverId): ServerInstallResult => {
       try {
-        const step = applyPlan(planInstall(serverId, file, bridge, text), file, bridge, serverId, options.replace === true);
+        const step = applyPlan(planInstall(serverId, file, bridge, text, undefined, options.create), file, bridge, serverId, options.replace === true);
         if (step.text !== undefined) text = step.text;
         return { serverId, status: step.status, message: step.message };
       } catch (err) {
@@ -448,6 +480,15 @@ export function installServers(
       }
     });
     if (text === original) return { client, path: file.path, servers };
+    if (missing) {
+      try {
+        createConfigFile(file.path, text);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EEXIST") return { client, path: file.path, servers: all("error", "The file appeared while installing. Try again.") };
+        throw err;
+      }
+      return { client, path: file.path, created: true, servers };
+    }
     const backup = backupFile(file.path);
     if (readFileSync(file.path, "utf-8") !== original) return { client, path: file.path, servers: all("error", "The file changed while installing. Try again.") };
     writeInPlace(file.path, text);

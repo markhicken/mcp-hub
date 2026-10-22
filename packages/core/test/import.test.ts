@@ -1,6 +1,63 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { knownApps, parseEnvFile, pointsAtHub, toServerConfig, unwrapOpRun } from "../src/import.js";
+import { candidatePaths, claudeCodeConfigPath, claudeDesktopWindowsPath, copilotConfigPath, knownApps, parseEnvFile, pointsAtHub, toServerConfig, unwrapOpRun } from "../src/import.js";
 import { MOCK, startHub, waitFor } from "./helpers.js";
+
+describe("where each app keeps its config", () => {
+  const home = join("home", "me");
+  const pathOf = (client: string) => candidatePaths().find((c) => c.client === client)!.path;
+
+  it("uses each app's documented default location under the home folder", () => {
+    const saved = { HOME: process.env.HOME, APPDATA: process.env.APPDATA, XDG: process.env.XDG_CONFIG_HOME, LOCAL: process.env.LOCALAPPDATA };
+    const root = join("tmp", "home");
+    process.env.HOME = root;
+    process.env.APPDATA = join(root, "AppData", "Roaming");
+    process.env.LOCALAPPDATA = join(root, "AppData", "Local");
+    delete process.env.XDG_CONFIG_HOME;
+    try {
+      expect(pathOf("Claude Code")).toBe(join(root, ".claude.json"));
+      expect(pathOf("ChatGPT / Codex")).toBe(join(root, ".codex", "config.toml"));
+      expect(pathOf("GitHub Copilot CLI")).toBe(join(root, ".copilot", "mcp-config.json"));
+      expect(pathOf("Cursor")).toBe(join(root, ".cursor", "mcp.json"));
+      expect(pathOf("Augment")).toBe(join(root, ".augment", "settings.json"));
+      // Per system: macOS keeps these under Library/Application Support, Windows under %APPDATA%, Linux under ~/.config.
+      const where = process.platform === "darwin" ? join(root, "Library", "Application Support") : process.platform === "win32" ? join(root, "AppData", "Roaming") : join(root, ".config");
+      expect(pathOf("VS Code")).toBe(join(where, "Code", "User", "mcp.json"));
+      expect(pathOf("Claude Desktop")).toBe(join(where, "Claude", "claude_desktop_config.json"));
+    } finally {
+      for (const [k, v] of [["HOME", saved.HOME], ["APPDATA", saved.APPDATA], ["XDG_CONFIG_HOME", saved.XDG], ["LOCALAPPDATA", saved.LOCAL]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
+  });
+
+  it("follows CLAUDE_CONFIG_DIR for Claude Code", () => {
+    expect(claudeCodeConfigPath(home, {})).toBe(join(home, ".claude.json"));
+    expect(claudeCodeConfigPath(home, { CLAUDE_CONFIG_DIR: join("custom", "claude") })).toBe(join("custom", "claude", ".claude.json"));
+    expect(claudeCodeConfigPath(home, { CLAUDE_CONFIG_DIR: "  " })).toBe(join(home, ".claude.json"));
+  });
+
+  it("follows COPILOT_HOME for the Copilot CLI, and XDG_CONFIG_HOME only where the config really is", () => {
+    const usual = join(home, ".copilot", "mcp-config.json");
+    const xdg = join("xdg", "copilot", "mcp-config.json");
+    expect(copilotConfigPath(home, {}, () => false)).toBe(usual);
+    expect(copilotConfigPath(home, { COPILOT_HOME: join("custom", "copilot") }, () => false)).toBe(join("custom", "copilot", "mcp-config.json"));
+    // XDG_CONFIG_HOME is set on many Linux systems without the CLI using it: the default stands unless only the XDG one exists.
+    expect(copilotConfigPath(home, { XDG_CONFIG_HOME: "xdg" }, () => false)).toBe(usual);
+    expect(copilotConfigPath(home, { XDG_CONFIG_HOME: "xdg" }, (p) => p === xdg)).toBe(xdg);
+    expect(copilotConfigPath(home, { XDG_CONFIG_HOME: "xdg" }, () => true)).toBe(usual);
+  });
+
+  it("uses the Store package's folder for Claude Desktop whenever that build is installed, even before it has a config", () => {
+    const appData = join("u", "AppData", "Roaming");
+    const local = join("u", "AppData", "Local");
+    const classic = join(appData, "Claude", "claude_desktop_config.json");
+    expect(claudeDesktopWindowsPath(appData, local, () => ["Microsoft.Windows.Photos_8wekyb3d8bbwe", "Spotify_abc"])).toBe(classic);
+    expect(claudeDesktopWindowsPath(appData, local, () => { throw new Error("ENOENT"); })).toBe(classic);
+    expect(claudeDesktopWindowsPath(appData, local, () => ["Spotify_abc", "Claude_pzs8sxrjxfjjc"])).toBe(join(local, "Packages", "Claude_pzs8sxrjxfjjc", "LocalCache", "Roaming", "Claude", "claude_desktop_config.json"));
+  });
+});
 
 describe("import", () => {
   it("lists the apps it can import from without reading anything", () => {
@@ -32,7 +89,7 @@ describe("import", () => {
       "/work/.env-dev": '# dev\nAPI_KEY=op://Private/Firewalla/key\nexport MODE="dev mode"\nPLAIN=yes # note\nMSG=\'op://V/I/f\'\n',
       "/work/more.env": "MODE=prod\n",
     };
-    const read = (p: string) => files[p] ?? null;
+    const read = (p: string) => files[p.replace(/\\/g, "/")] ?? null;
     const entry = {
       command: "op",
       args: ["run", "--no-masking", "--env-file=/work/.env-dev", "--env-file", "/work/more.env", "--", "/usr/bin/node", "/x/npm-cli.js", "run", "dev"],

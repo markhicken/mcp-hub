@@ -1,7 +1,9 @@
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { basename } from "node:path";
+import { basename, win32 as winPath } from "node:path";
 import { AppStore } from "./app-store.js";
+import { runPowerShell } from "./powershell.js";
+import { windowsProcess } from "./proc.js";
 
 export interface ClientInfo {
   id: string;
@@ -50,11 +52,31 @@ export const psArgs: ArgsLookup = (pid) =>
     execFile("ps", ["-o", "command=", "-p", String(pid)], { timeout: 3000 }, (err, out) => resolve(err ? "" : String(out).trim()));
   });
 
-// Shells and launchers sit between an app and the MCP bridge; they are never "the client".
-const WRAPPERS = new Set(["sh", "bash", "zsh", "dash", "fish", "ksh", "tcsh", "csh", "env", "login", "sudo", "npx", "npm", "pnpm", "yarn", "uvx", "uv", "pipx", "bunx", "tsx", "nohup", "caffeinate", "tmux", "screen", "script"]);
-const RUNTIMES = new Set(["node", "bun", "deno", "python", "python3", "ruby", "java"]);
+/** Windows: from the cached CIM process table (one PowerShell query covers a whole ancestry chain). */
+export const winLookup: ProcLookup = async (pid) => {
+  const p = await windowsProcess(pid);
+  return p ? { pid, ppid: p.ppid, started: p.started, command: p.command } : null;
+};
 
-const exeName = (command: string) => basename(command).replace(/^-/, "").toLowerCase();
+export const winArgs: ArgsLookup = async (pid) => (await windowsProcess(pid))?.cmdline ?? "";
+
+const defaultLookup: ProcLookup = (pid) => (process.platform === "win32" ? winLookup(pid) : psLookup(pid));
+const defaultArgs: ArgsLookup = (pid) => (process.platform === "win32" ? winArgs(pid) : psArgs(pid));
+
+// Shells and launchers sit between an app and the MCP bridge; they are never "the client".
+const WRAPPERS = new Set([
+  "sh", "bash", "zsh", "dash", "fish", "ksh", "tcsh", "csh", "env", "login", "sudo", "npx", "npm", "pnpm", "yarn", "uvx", "uv", "pipx", "bunx", "tsx", "nohup", "caffeinate", "tmux", "screen", "script",
+  // Windows: shells and the console host a command-line tool runs under (`.exe`/`.cmd`/`.bat` are stripped from names).
+  // Terminal apps (Windows Terminal) are not listed: like iTerm on macOS they are what a CLI falls back to.
+  "cmd", "powershell", "pwsh", "conhost", "openconsole", "wsl", "wslhost", "mintty", "winpty",
+]);
+const RUNTIMES = new Set(["node", "bun", "deno", "python", "python3", "pythonw", "py", "ruby", "java"]);
+
+/** A path in Windows form (`C:\…`, `C:/…` or `\\server\…`), whatever system we are running on, so the Windows rules can be tested anywhere. */
+export const isWindowsPath = (p: string): boolean => /^(?:[a-zA-Z]:[\\/]|\\\\)/.test(p);
+
+const baseName = (p: string): string => (isWindowsPath(p) ? winPath.basename(p) : basename(p));
+const exeName = (command: string) => baseName(command).replace(/^-/, "").replace(/\.(?:exe|cmd|bat)$/i, "").toLowerCase();
 
 /** The outermost .app bundle in an executable path, if any. */
 export function appBundle(command: string): string | null {
@@ -62,27 +84,55 @@ export function appBundle(command: string): string | null {
   return i < 0 ? null : command.slice(0, i + 4);
 }
 
+const MSIX_VERSION = /_\d+(?:\.\d+)+_/;
+const VERSION_FOLDER = /^(?:app-)?\d+(?:\.\d+)+\S*$/i;
+
+/**
+ * Where a Windows program is installed, without the parts that change on update, so every helper process an app starts and
+ * every new version of it share one identity: `…\AnthropicClaude\app-0.9.2\claude.exe` -> `…\anthropicclaude`, and an MSIX
+ * package `…\WindowsApps\Claude_1.2.3.0_x64__hash\app\Claude.exe` -> `…\windowsapps\claude_*_x64__hash\app`.
+ * Lower case with `\`, because Windows paths ignore case.
+ */
+export function installFolder(exePath: string): string {
+  const parts = exePath.split(/[\\/]+/).filter(Boolean);
+  parts.pop();
+  while (parts.length > 1 && VERSION_FOLDER.test(parts[parts.length - 1]!)) parts.pop();
+  return parts.map((s) => s.replace(MSIX_VERSION, "_*_")).join("\\").toLowerCase();
+}
+
+/** The identity of a Windows program: its install folder and program name (several tools can share one `bin` folder). */
+const winAppKey = (exePath: string): string => `${installFolder(exePath)}|${exeName(exePath)}`;
+
+/** Splits a command line into arguments, honouring double quotes (Windows paths contain spaces). */
+export function splitCommandLine(cmd: string): string[] {
+  return [...cmd.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2] ?? "");
+}
+
 export interface ResolvedClient {
   key: string;
   name: string;
   pid: number;
   path: string;
-  /** Stable across restarts: the .app bundle, or the program (and script) for a command-line tool. */
+  /** Stable across restarts: the .app bundle or Windows install folder, or the program (and script) for a command-line tool. */
   identity: string;
 }
 
 /**
  * Work out which app owns a bridge process: the nearest ancestor that is not a shell or launcher.
- * Apps (.app bundles) are identified by their topmost process, so every helper they spawn shares one identity.
+ * Apps (.app bundles; on Windows a program's install folder) are identified by their topmost process, so every helper
+ * they spawn shares one identity.
  */
-export async function resolveClient(shimPid: number, lookup: ProcLookup = psLookup, args: ArgsLookup = psArgs): Promise<ResolvedClient | null> {
+export async function resolveClient(shimPid: number, lookup: ProcLookup = defaultLookup, args: ArgsLookup = defaultArgs): Promise<ResolvedClient | null> {
   const self = await lookup(shimPid);
   if (!self) return null;
   const chain: ProcInfo[] = [];
-  for (let next = self.ppid; next > 1 && chain.length < 16; ) {
+  for (let next = self.ppid, child = self; next > 1 && chain.length < 16; ) {
     const p = await lookup(next);
     if (!p) break;
+    // Windows reuses pids: a "parent" that started after its child is a stranger that took the dead parent's number.
+    if (/^\d+$/.test(p.started) && /^\d+$/.test(child.started) && BigInt(p.started) > BigInt(child.started)) break;
     chain.push(p);
+    child = p;
     next = p.ppid;
   }
   let i = chain.findIndex((p) => !WRAPPERS.has(exeName(p.command)));
@@ -98,10 +148,17 @@ export async function resolveClient(shimPid: number, lookup: ProcLookup = psLook
     identity = `app:${app}`;
   } else if (RUNTIMES.has(exeName(path))) {
     const cmd = await args(chain[i]!.pid);
-    const script = cmd.split(/\s+/).slice(1).find((a) => !a.startsWith("-")) ?? "";
-    const pkg = [...script.matchAll(/node_modules\/((?:@[^/]+\/)?[^/.][^/]*)/g)].pop()?.[1];
-    name = pkg ?? (script ? basename(script) : basename(path));
+    const tokens = isWindowsPath(path) ? splitCommandLine(cmd) : cmd.split(/\s+/);
+    const script = tokens.slice(1).find((a) => !a.startsWith("-")) ?? "";
+    const pkg = [...script.matchAll(/node_modules[\\/]((?:@[^\\/]+[\\/])?[^\\/.][^\\/]*)/g)].pop()?.[1]?.replace(/\\/g, "/");
+    name = pkg ?? (script ? baseName(script) : baseName(path));
     identity = `bin:${path}|${pkg ?? script}`;
+  } else if (isWindowsPath(path)) {
+    const key = winAppKey(path);
+    while (i + 1 < chain.length && isWindowsPath(chain[i + 1]!.command) && winAppKey(chain[i + 1]!.command) === key) i++;
+    path = chain[i]!.command;
+    name = baseName(path).replace(/\.exe$/i, "");
+    identity = `app:${key}`;
   } else {
     name = basename(path);
     identity = `bin:${path}`;
@@ -124,6 +181,22 @@ export const codesignSigner: SignerLookup = (bundle) =>
       resolve(team && team !== "not set" ? `${id ?? ""}|${team}` : "");
     });
   });
+
+/** Windows: the Authenticode signer (certificate subject) of a program whose signature is valid; "" when unsigned or untrusted, like macOS ad hoc. */
+export const authenticodeSigner: SignerLookup = async (exePath) => {
+  if (process.platform !== "win32") return "";
+  try {
+    const out = await runPowerShell(
+      "$s = Get-AuthenticodeSignature -LiteralPath $env:HUB_EXE\nif ($s.Status -eq 'Valid' -and $s.SignerCertificate) { [Console]::Out.Write($s.SignerCertificate.Subject) }",
+      { env: { HUB_EXE: exePath }, timeoutMs: 15_000 },
+    );
+    return out.trim();
+  } catch {
+    return "";
+  }
+};
+
+const platformSigner: SignerLookup = (path) => (process.platform === "win32" ? authenticodeSigner(path) : codesignSigner(path));
 
 export interface GateOptions {
   lookup?: ProcLookup;
@@ -221,7 +294,7 @@ export class ClientGate extends EventEmitter {
           if (!r) return null;
           if (!this.clients.has(r.key)) {
             const now = Date.now();
-            const signer = r.identity.startsWith("app:") ? await (this.opts.signer ?? codesignSigner)(r.path) : "";
+            const signer = r.identity.startsWith("app:") ? await (this.opts.signer ?? platformSigner)(r.path) : "";
             const info: ClientInfo = { id: r.key, name: r.name, pid: r.pid, path: r.path, status: "pending", since: now, lastSeen: now, requests: 0, servers: [], allowed: null, identity: r.identity, remembered: false, running: true };
             // Another connection from the same app may have registered it while the signature was being read.
             if (!this.clients.has(r.key)) {

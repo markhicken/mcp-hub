@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { renameWithRetry } from "./atomic-write.js";
 
 /** What the user decided about one app, kept so the app isn't asked about again. */
 export interface SavedApp {
@@ -87,7 +88,7 @@ export class AppStore {
       const tmp = `${this.path}.tmp`;
       writeFileSync(tmp, JSON.stringify({ version: 1, apps: [...this.apps.values()] }, null, 2), { mode: 0o600 });
       chmodSync(tmp, 0o600);
-      renameSync(tmp, this.path);
+      renameWithRetry(tmp, this.path);
     } catch {
       // The choice still applies until the app quits; it just won't survive a restart.
     }

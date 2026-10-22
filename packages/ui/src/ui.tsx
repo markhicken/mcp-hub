@@ -1,6 +1,7 @@
 import { Check, ChevronDown, Copy, X } from "lucide-react";
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { api } from "./api";
+import { fileManager } from "./lib";
 
 export const cx = (...parts: Array<string | false | null | undefined>): string => parts.filter(Boolean).join(" ");
 
@@ -344,7 +345,7 @@ export function EmptyState({ icon, title, body, children }: { icon: ReactNode; t
 }
 
 /**
- * A file path that opens in Finder (or the OS file manager) when clicked. Every path the UI shows should be one of
+ * A file path that opens in the file manager (Finder, Explorer…) when clicked. Every path the UI shows should be one of
  * these. The hub looks the file up itself, so no arbitrary path is ever sent back to it: say what the path belongs to.
  *   app      an app's config file (by the app's name), or with `backup`, a backup copy of it
  *   running  a connected app's program (by its id)
@@ -362,7 +363,7 @@ export function PathLink({ path, app, backup, running, exported, wrap, className
     }
   };
   return (
-    <button type="button" onClick={open} title={`Show in Finder: ${path}`} className={cx("max-w-full cursor-pointer text-left hover:text-accent hover:underline", wrap ? "break-all" : "block truncate", className)}>
+    <button type="button" onClick={open} title={`Show in ${fileManager}: ${path}`} className={cx("max-w-full cursor-pointer text-left hover:text-accent hover:underline", wrap ? "break-all" : "block truncate", className)}>
       {path}
     </button>
   );

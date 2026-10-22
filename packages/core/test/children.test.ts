@@ -18,7 +18,7 @@ const waitDead = async (pid: number): Promise<boolean> => {
   return !alive(pid);
 };
 
-describe.skipIf(process.platform === "win32")("leftover MCP servers from a hub that died", () => {
+describe("leftover MCP servers from a hub that died", () => {
   const procs: ChildProcess[] = [];
   const idle = (extra = ""): ChildProcess => {
     const p = spawn(process.execPath, ["-e", `${extra}setInterval(() => {}, 1000)`], { stdio: "ignore" });
@@ -56,7 +56,7 @@ describe.skipIf(process.platform === "win32")("leftover MCP servers from a hub t
   it("finds what a server started and stops it after the server is gone", async () => {
     const wrapper = idle(`require("child_process").spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });`);
     await new Promise((r) => setTimeout(r, 300));
-    const family = descendantsOf(wrapper.pid!);
+    const family = await descendantsOf(wrapper.pid!);
     expect(family).toHaveLength(1);
     wrapper.kill("SIGKILL"); // the real server is now an orphan
     await waitDead(wrapper.pid!);

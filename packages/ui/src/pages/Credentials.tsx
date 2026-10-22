@@ -4,7 +4,7 @@ import { api } from "../api";
 import { EncryptionCard } from "../Encryption";
 import { ForgetAfterSelect, SignInTtlSelect } from "../ForgetAfter";
 import { timeAgo, timeUntil } from "../lib";
-import { SetupSection } from "../Setup";
+import { SetupNotice, useSetup, type Setup } from "../Setup";
 import type { SourceConfig, SourceType, Snapshot } from "../types";
 import { Badge, Button, Card, Chip, Confirm, Dialog, EmptyState, Field, Input, PageHeader, Select, Switch, cx, useToast } from "../ui";
 
@@ -23,6 +23,7 @@ export function CredentialsPage({ snap }: { snap: Snapshot }) {
   const [forgetting, setForgetting] = useState(false);
   const [addSecret, setAddSecret] = useState(false);
   const cached = snap.credentials.cached;
+  const setup = useSetup(snap);
 
   return (
     <div className="space-y-8">
@@ -31,8 +32,6 @@ export function CredentialsPage({ snap }: { snap: Snapshot }) {
         subtitle="Where secrets come from, and what MCP Hub is holding in memory right now."
         actions={<Button variant="danger" onClick={() => setForgetting(true)} disabled={!cached.length}><Eraser className="size-4" /> Forget all</Button>}
       />
-
-      <SetupSection snap={snap} />
 
       <section className="space-y-4">
         {!snap.credentials.encryption.persistent && !snap.credentials.encryption.locked && (
@@ -114,7 +113,7 @@ export function CredentialsPage({ snap }: { snap: Snapshot }) {
           <Button size="sm" onClick={() => setAdding(true)}><Plus className="size-3.5" /> Add source</Button>
         </div>
         <div className="grid gap-4 md:grid-cols-2">
-          {snap.sources.map((s) => <SourceCard key={s.id} source={s} vaultAddress={snap.environment.vaultAddress} onEdit={() => setEditing(s)} />)}
+          {snap.sources.map((s) => <SourceCard key={s.id} source={s} setup={setup} vaultAddress={snap.environment.vaultAddress} onEdit={() => setEditing(s)} />)}
         </div>
         {snap.sources.length === 0 && <EmptyState icon={<KeyRound className="size-6" />} title="No sources" body="Add a credential source to start." />}
       </section>
@@ -189,7 +188,7 @@ function RememberedSignIns({ snap }: { snap: Snapshot }) {
   );
 }
 
-function SourceCard({ source: s, vaultAddress, onEdit }: { source: SourceConfig; vaultAddress: string | null; onEdit: () => void }) {
+function SourceCard({ source: s, setup, vaultAddress, onEdit }: { source: SourceConfig; setup: Setup; vaultAddress: string | null; onEdit: () => void }) {
   const toast = useToast();
   const info = TYPE_INFO[s.type];
   const [result, setResult] = useState<{ ok: boolean; message: string; hint?: "sign-in" } | null>(null);
@@ -231,6 +230,7 @@ function SourceCard({ source: s, vaultAddress, onEdit }: { source: SourceConfig;
         <Switch checked={s.enabled} label={`Enable ${s.name}`} onChange={(v) => api("PUT", `/api/sources/${s.id}`, { enabled: v }).catch((e) => toast((e as Error).message, "error"))} />
       </div>
       <p className="font-mono text-xs text-muted">Use as <span className="text-fg">{info.example}</span></p>
+      <SetupNotice source={s} setup={setup} />
       {(Object.keys(s.options).length > 0 || (s.type === "vault" && vaultAddress)) && (
         <div className="flex flex-wrap gap-1.5">
           {s.type === "vault" && !s.options.address && vaultAddress && <Chip>address: {vaultAddress} (VAULT_ADDR)</Chip>}

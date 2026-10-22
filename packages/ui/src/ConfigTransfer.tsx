@@ -1,6 +1,7 @@
 import { AlertTriangle, Download, Upload } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
+import { fileManager } from "./lib";
 import { Button, Chip, Dialog, PathLink, Textarea, cx, useToast } from "./ui";
 
 interface ExportDoc {
@@ -81,7 +82,7 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
       footer={
         done ? (
           <>
-            {savedTo && <Button onClick={() => api("POST", "/api/config/export/reveal").catch((e) => toast((e as Error).message, "error"))}>Show in Finder</Button>}
+            {savedTo && <Button onClick={() => api("POST", "/api/config/export/reveal").catch((e) => toast((e as Error).message, "error"))}>Show in {fileManager}</Button>}
             <Button variant="primary" onClick={onClose}>Done</Button>
           </>
         ) : (

@@ -10,14 +10,17 @@
 #                          paths-ignore below). Note a push mixing those with app changes still runs.
 #
 # The hub and the bridge are Node programs packaged with the Node that builds them (scripts/build-sidecars.mjs),
-# so each platform is built on its own runner. macOS is the platform MCP Hub is developed on; to add Windows or
-# Linux, add runners to the matrix below (they build with `npm run build:app` too, but haven't been tried).
+# so each platform is built on its own runner: macOS (Apple silicon and Intel) and Windows (x64 and ARM64). To add
+# Linux, add a runner to the matrix below (it builds with `npm run build:app` too, but hasn't been tried).
 #
-# Signing is optional. Without the secrets below the macOS builds are unsigned (people open them with right-click
-# -> Open the first time). With them they are signed with a Developer ID certificate and notarized:
+# Signing is optional. Without the secrets below the builds are unsigned (macOS: right-click -> Open the first time;
+# Windows: SmartScreen's "Run anyway"). With them macOS is signed with a Developer ID certificate and notarized:
 #   APPLE_CERTIFICATE            base64 of the Developer ID Application .p12   (base64 -i cert.p12 | pbcopy)
 #   APPLE_CERTIFICATE_PASSWORD   the .p12 password
 #   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID   notarization (an app-specific password, not your Apple ID password)
+# and Windows is signed with an Authenticode certificate:
+#   WINDOWS_CERTIFICATE          base64 of the code-signing .pfx
+#   WINDOWS_CERTIFICATE_PASSWORD the .pfx password
 name: Release
 
 on:
@@ -71,6 +74,8 @@ jobs:
         include:
           - { name: macOS (Apple silicon), slug: macos-arm64, os: macos-latest }
           - { name: macOS (Intel), slug: macos-x64, os: macos-15-intel }
+          - { name: Windows (x64), slug: windows-x64, os: windows-latest }
+          - { name: Windows (ARM64), slug: windows-arm64, os: windows-11-arm }
     steps:
       - uses: actions/checkout@v4
 
@@ -97,8 +102,10 @@ jobs:
         shell: bash
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
         run: |
           if [ -n "$APPLE_CERTIFICATE" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$WINDOWS_CERTIFICATE" ]; then echo "windows=true" >> "$GITHUB_OUTPUT"; fi
 
       - name: Import the signing certificate
         if: runner.os == 'macOS' && steps.signing.outputs.enabled == 'true'
@@ -131,6 +138,24 @@ jobs:
             } >> "$GITHUB_ENV"
           fi
           rm -f "$RUNNER_TEMP/certificate.p12"
+
+      # Optional Authenticode signing. Without the secrets the Windows installer is unsigned and SmartScreen warns
+      # ("Windows protected your PC": More info -> Run anyway). With them the certificate is imported for this job and
+      # Tauri signs the app and installer with it (TAURI_CONFIG is merged over tauri.conf.json).
+      - name: Import the Windows signing certificate
+        if: runner.os == 'Windows' && steps.signing.outputs.windows == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'certificate.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          $config = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = 'sha256'; timestampUrl = 'http://timestamp.digicert.com' } } } | ConvertTo-Json -Compress -Depth 5
+          "TAURI_CONFIG=$config" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - run: npm ci
 
@@ -216,8 +241,9 @@ jobs:
           ## Installing
 
           - **macOS:** open the `.dmg` for your Mac (`aarch64` is Apple silicon, `x64` is Intel) and drag MCP Hub to Applications.
+          - **Windows:** run the `-setup.exe` for your PC (`x64` for most PCs, `arm64` for Snapdragon/ARM PCs). It installs for your user only, no administrator rights needed. The installer isn't code-signed yet, so Windows SmartScreen may say "Windows protected your PC": choose **More info → Run anyway**.
           - If macOS says the app can't be opened because it is from an unidentified developer, this build isn't notarized yet: open **System Settings → Privacy & Security** and choose **Open Anyway** (on older macOS, right-click the app and choose **Open**). If it says the app is "damaged", run `xattr -cr "/Applications/MCP Hub.app"` and open it again.
-          - Check a download against `SHA256SUMS.txt` with `shasum -a 256 <file>`.
+          - Check a download against `SHA256SUMS.txt` with `shasum -a 256 <file>` (macOS) or `Get-FileHash <file>` (Windows PowerShell).
           EOF
 
       - if: steps.version.outputs.publish == 'true'

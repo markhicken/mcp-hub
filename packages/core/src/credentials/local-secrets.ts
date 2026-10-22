@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { renameWithRetry } from "../atomic-write.js";
 import { SecretBox, SecretBoxError } from "./box.js";
 import { CredentialError } from "./types.js";
 
@@ -48,7 +49,7 @@ export class LocalSecrets {
     const tmp = `${this.file}.tmp`;
     const body: SecretsFile = { version: 1, algorithm: this.box.algorithm, secrets: Object.fromEntries(this.map) };
     writeFileSync(tmp, JSON.stringify(body, null, 2), { mode: 0o600 });
-    renameSync(tmp, this.file);
+    renameWithRetry(tmp, this.file);
     chmodSync(this.file, 0o600);
   }
 

@@ -38,7 +38,8 @@ describe("remembered apps", () => {
     expect((await pending).status).toBe("allowed");
     expect(asked).toEqual(["Fake Client"]);
     first.close();
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    // POSIX permission bits don't exist on Windows (the profile's ACLs protect the file there).
+    if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
 
     // A new copy of the app (different pid) and a new hub: nothing is asked.
     const second = mk(file, launch(77, APP));

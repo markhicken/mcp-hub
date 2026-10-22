@@ -162,7 +162,8 @@ describe("saving an export", () => {
       expect(res.body).toEqual({ path });
       const saved = JSON.parse(readFileSync(path, "utf-8"));
       expect(saved).toMatchObject({ format: "mcp-hub-config", servers: [{ name: "Wiki", env: { TOKEN: "{{op://V/Wiki/token}}" } }] });
-      expect(statSync(path).mode & 0o777).toBe(0o600);
+      // POSIX permission bits don't exist on Windows (the profile's ACLs protect the file there).
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o600);
 
       expect((await t.api("POST", "/api/config/export/reveal")).status).toBe(200);
       expect(revealed).toEqual([path]);

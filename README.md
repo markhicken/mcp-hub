@@ -25,13 +25,33 @@ Each app connects through a small bridge that MCP Hub adds to its config. The fi
 
 ## Get started
 
-1. **[Download the latest release](https://github.com/markhicken/mcp-hub/releases/latest)**, open the `.dmg` for your Mac (`aarch64` is Apple silicon, `x64` is Intel) and drag MCP Hub to Applications.
-2. Builds aren't notarized yet, so the first time macOS says it can't verify the app: open **System Settings → Privacy & Security** and choose **Open Anyway** (or run `xattr -cr "/Applications/MCP Hub.app"`). You can check a download against `SHA256SUMS.txt` on the release page.
+1. **[Download the latest release](https://github.com/markhicken/mcp-hub/releases/latest)**. On a Mac, open the `.dmg` for your Mac (`aarch64` is Apple silicon, `x64` is Intel) and drag MCP Hub to Applications. On Windows, run the `-setup.exe` (`x64` for most PCs, `arm64` for ARM PCs); it installs for your user only.
+2. Builds aren't signed yet. On macOS the first time says it can't verify the app: open **System Settings → Privacy & Security** and choose **Open Anyway** (or run `xattr -cr "/Applications/MCP Hub.app"`). On Windows, SmartScreen may say "Windows protected your PC": choose **More info → Run anyway**. You can check a download against `SHA256SUMS.txt` on the release page.
 3. Follow the welcome tour: save your recovery key, then scan your apps to import their servers or install MCP Hub into them.
 
 ## Platform support
 
-**macOS only for now.** Windows and Linux are not finished: parts of the code exist but are untested, and no installers are published for them. You can [run it from source](#run-from-source) on them at your own risk.
+**macOS is the tested platform; Windows is new.** Windows builds (per-user NSIS installer, x64 and ARM64) are produced by the release workflow and are not code-signed yet (SmartScreen will warn). Linux is not finished. You can [run it from source](#run-from-source) on any of them.
+
+## Prerequisites
+
+To install and use MCP Hub you need nothing else: download the installer from the [releases page](https://github.com/markhicken/mcp-hub/releases/latest). To run it from source or build it yourself:
+
+| You need | For | Notes |
+|---|---|---|
+| **Node.js 24 or newer** (includes npm) | everything (`npm run dev`, `npm test`, builds) | Check with `node -v`. |
+| **Rust** (1.86 or newer, via [`rustup`](https://rustup.rs)) | building the desktop app only (`npm run build:app`, `build:app:debug`) | Not needed to run from source or run the tests. |
+| **A C/C++ build toolchain** | building the desktop app only | macOS: Xcode Command Line Tools (`xcode-select --install`). Windows: Visual Studio Build Tools with the "Desktop development with C++" workload. |
+
+On Windows, one way to get all of it:
+
+```powershell
+winget install OpenJS.NodeJS
+winget install Rustlang.Rustup
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+After installing anything, **open a new terminal (and restart your editor)** so it picks up the new PATH; otherwise commands such as `cargo` are "not found". The rest of the Tauri requirements are listed in the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ## Run from source
 
@@ -43,7 +63,7 @@ npm test
 
 ## Build a debug app
 
-Builds the macOS `.app` faster than a release build, with no installer. You need Node 24, npm and a Rust toolchain ([`rustup`](https://rustup.rs)).
+Builds the app faster than a release build (on macOS the `.app` only, no installer; on Windows the NSIS installer). It needs everything in [Prerequisites](#prerequisites), including Rust. On Windows, `npm run build:app` builds the release NSIS installer; the result ends up in `dist/`.
 
 ```bash
 npm install
