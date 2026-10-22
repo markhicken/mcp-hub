@@ -1,6 +1,6 @@
 # MCP Hub
 
-**One home for every MCP server on your Mac.** Run your MCP servers once, keep their secrets encrypted, and let all your AI apps share them, with a live view of what each one is doing.
+**One home for every MCP server.** Run your MCP servers once, keep their secrets encrypted, and let all your AI apps share them, with a live view of what each one is doing.
 
 **[Download](https://github.com/markhicken/mcp-hub/releases/latest)** · [How it works](ARCHITECTURE.md)
 
