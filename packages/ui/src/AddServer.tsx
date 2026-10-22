@@ -1,9 +1,9 @@
-import { ArrowLeft, ClipboardPaste, Globe, KeyRound, Lock, Plus, Terminal, Trash2, X } from "lucide-react";
-import { useId, useState } from "react";
+import { ArrowLeft, ClipboardPaste, Globe, KeyRound, Plus, Terminal, Trash2, X } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { api } from "./api";
-import { isCredentialRef, parseServerJson, slugify, splitArgs } from "./lib";
+import { parseServerJson, refParts, slugify, splitArgs } from "./lib";
 import type { ServerConfig, ServerStatus } from "./types";
-import { Button, Chip, Dialog, Field, Input, Segmented, Select, Textarea, cx, useToast } from "./ui";
+import { Button, Chip, Dialog, Field, Input, Segmented, Select, Textarea, cx, inputCls, useToast } from "./ui";
 
 interface Template {
   name: string;
@@ -207,17 +207,17 @@ export function AddServerDialog({ existing, knownLabels = [], onClose }: Props) 
           {transport === "stdio" ? (
             <>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Command"><Input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="npx" className="font-mono" /></Field>
-                <Field label="Working directory" hint="Optional"><Input value={cwd} onChange={(e) => setCwd(e.target.value)} className="font-mono" /></Field>
+                <Field label="Command"><RefField value={command} onChange={setCommand} placeholder="npx" /></Field>
+                <Field label="Working directory" hint="Optional"><RefField value={cwd} onChange={setCwd} /></Field>
               </div>
               <Field label="Arguments" hint="Space separated; line breaks count as spaces. Use quotes for values that contain spaces.">
-                <Textarea value={args} onChange={(e) => setArgs(e.target.value)} rows={Math.min(8, Math.max(2, Math.ceil(args.length / 80) + (args.match(/\n/g)?.length ?? 0)))} placeholder="-y @modelcontextprotocol/server-github" className="resize-y whitespace-pre-wrap break-all" />
+                <RefField multiline value={args} onChange={setArgs} rows={Math.min(8, Math.max(2, Math.ceil(args.length / 80) + (args.match(/\n/g)?.length ?? 0)))} placeholder="-y @modelcontextprotocol/server-github" />
               </Field>
               <PairsEditor label="Environment variables" pairs={env} onChange={setEnv} keyPlaceholder="NAME" />
             </>
           ) : (
             <>
-              <Field label="Server URL"><Input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://example.com/mcp" className="font-mono" /></Field>
+              <Field label="Server URL"><RefField value={url} onChange={setUrl} placeholder="https://example.com/mcp" /></Field>
               <Field label="Authentication">
                 <Segmented value={auth} onChange={setAuth} options={[{ value: "none", label: "None / headers" }, { value: "oauth", label: "Sign in (OAuth)" }]} />
               </Field>
@@ -324,16 +324,68 @@ const SOURCE_HELP: Record<string, { label: string; placeholder: string; wrap: (v
   secret: { label: "Type a secret", placeholder: "", wrap: (v) => `{{secret://${v}}}` },
 };
 
+/**
+ * A text field (or a text area) that shows the credential references in it in green, and the rest as
+ * normal text. The real field sits on top with invisible text; a copy of the text with the colours sits behind it
+ * and is kept scrolled to match.
+ */
+function RefField({ value, onChange, placeholder, label, multiline, rows }: { value: string; onChange: (v: string) => void; placeholder?: string; label?: string; multiline?: boolean; rows?: number }) {
+  const back = useRef<HTMLDivElement>(null);
+  const [field, setField] = useState<HTMLInputElement | HTMLTextAreaElement | null>(null);
+  const [focused, setFocused] = useState(false);
+  const parts = refParts(value);
+  const sync = () => {
+    if (!back.current || !field) return;
+    back.current.scrollLeft = field.scrollLeft;
+    back.current.scrollTop = field.scrollTop;
+  };
+  useLayoutEffect(sync, [value, field]);
+  // Moving the cursor or dragging a selection scrolls the field without any event that is reliable in every webview.
+  useEffect(() => {
+    if (!focused) return;
+    let frame = requestAnimationFrame(function tick() {
+      sync();
+      frame = requestAnimationFrame(tick);
+    });
+    return () => cancelAnimationFrame(frame);
+  });
+  const shared = {
+    value,
+    placeholder,
+    "aria-label": label,
+    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => onChange(e.target.value),
+    onFocus: () => setFocused(true),
+    onBlur: () => setFocused(false),
+    onScroll: sync,
+    style: { background: "transparent", color: "transparent", caretColor: "var(--fg)" },
+  };
+  return (
+    <div className="relative min-w-0 flex-1 rounded-lg bg-surface">
+      <div
+        ref={back}
+        aria-hidden
+        className={cx(
+          "pointer-events-none absolute inset-0 overflow-hidden rounded-lg border border-transparent px-3 font-mono text-fg",
+          multiline ? "whitespace-pre-wrap break-all py-2 text-xs" : "whitespace-pre text-sm leading-[34px]",
+        )}
+      >
+        {parts.map((p, i) => (p.ref ? <span key={i} className="rounded-sm bg-good/10 text-good">{p.text}</span> : <span key={i}>{p.text}</span>))}
+      </div>
+      {multiline ? (
+        <textarea {...shared} ref={setField as never} rows={rows} className={cx(inputCls, "ref-field relative h-auto min-h-20 resize-y whitespace-pre-wrap break-all py-2 font-mono text-xs")} />
+      ) : (
+        <input {...shared} ref={setField as never} className={cx(inputCls, "ref-field relative font-mono leading-[34px]")} />
+      )}
+    </div>
+  );
+}
+
 function CredentialValue({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
-  const isRef = isCredentialRef(value);
   return (
     <div className="min-w-0 flex-1">
       <div className="flex gap-1.5">
-        <div className="relative flex-1">
-          {isRef && <Lock className="absolute left-2.5 top-2.5 size-3.5 text-good" aria-label="Credential reference" />}
-          <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder="value or credential" className={cx("font-mono", isRef && "pl-8 text-good")} aria-label="Value" />
-        </div>
+        <RefField value={value} onChange={onChange} placeholder="value or credential" label="Value" />
         <Button size="sm" className="h-9" onClick={() => setOpen((o) => !o)} aria-label="Pick a credential" aria-expanded={open}><KeyRound className="size-4" /></Button>
       </div>
       {open && <CredentialPicker onPick={(v) => { onChange(v); setOpen(false); }} onClose={() => setOpen(false)} />}

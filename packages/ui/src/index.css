@@ -80,6 +80,13 @@ body {
   outline-offset: 2px;
 }
 
+/* The reference-highlighting fields draw their text in a layer behind a transparent input. Selected text must stay
+   transparent too, or some engines paint the input's own glyphs, half a pixel off the visible ones. */
+.ref-field::selection {
+  color: transparent;
+  background-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
 @keyframes pulse-ring {
   0% {
     box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);

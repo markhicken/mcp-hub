@@ -106,7 +106,7 @@ export function useNow(everyMs = 15_000): number {
 
 // ---------------------------------------------------------------------------- Form controls
 
-const inputCls =
+export const inputCls =
   "h-9 w-full rounded-lg border border-border bg-surface px-3 text-sm text-fg placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/25";
 
 export function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {

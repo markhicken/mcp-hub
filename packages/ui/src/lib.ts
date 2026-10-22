@@ -132,3 +132,11 @@ export function parseServerJson(text: string): Array<Partial<ServerConfig>> {
 export function isCredentialRef(v: string): boolean {
   return /\{\{\s*(op|keychain|vault|env|secret):\/\//.test(v) || /^(op|keychain|vault|env|secret):\/\//.test(v.trim());
 }
+
+const REF_PART = /(\{\{\s*(?:op|keychain|vault|env|secret):\/\/[^{}]*\}\})/g;
+
+/** The value as pieces, flagging the credential references that MCP Hub will replace with the secret. A bare reference counts as a whole. */
+export function refParts(value: string): Array<{ text: string; ref: boolean }> {
+  if (!value.includes("{{") && isCredentialRef(value)) return [{ text: value, ref: true }];
+  return value.split(REF_PART).filter(Boolean).map((text) => ({ text, ref: text.startsWith("{{") && isCredentialRef(text) }));
+}

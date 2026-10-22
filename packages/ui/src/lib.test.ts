@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { colorFor, formatBytes, isCredentialRef, parseServerJson, slugify, splitArgs, timeAgo, timeUntil } from "./lib";
+import { colorFor, formatBytes, isCredentialRef, parseServerJson, refParts, slugify, splitArgs, timeAgo, timeUntil } from "./lib";
 
 describe("formatBytes", () => {
   it("formats sizes", () => {
@@ -56,5 +56,18 @@ describe("isCredentialRef", () => {
     expect(isCredentialRef("{{op://v/i/f}}")).toBe(true);
     expect(isCredentialRef("op://v/i/f")).toBe(true);
     expect(isCredentialRef("plain")).toBe(false);
+  });
+});
+
+describe("refParts", () => {
+  it("marks only the references inside a larger value", () => {
+    expect(refParts("https://x/mcp?api_key={{op://V/I/f}}&paper=true")).toEqual([
+      { text: "https://x/mcp?api_key=", ref: false },
+      { text: "{{op://V/I/f}}", ref: true },
+      { text: "&paper=true", ref: false },
+    ]);
+    expect(refParts("Bearer {{ secret://t }}").map((p) => p.ref)).toEqual([false, true]);
+    expect(refParts("op://V/I/f")).toEqual([{ text: "op://V/I/f", ref: true }]);
+    expect(refParts("{{not a ref}} plain")).toEqual([{ text: "{{not a ref}} plain", ref: false }]);
   });
 });
