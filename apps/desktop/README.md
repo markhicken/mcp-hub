@@ -1,6 +1,6 @@
 # MCP Hub desktop (Tauri v2)
 
-> **Status:** the macOS app is the tested one. The Windows build (per-user NSIS installer, `tauri.windows.conf.json`) is new and is being verified on real machines; the Linux notes below describe the intended setup but are not finished, and no Linux installers are published.
+> **Status:** the macOS app and the Windows app (per-user NSIS installer, configured in `tauri.windows.conf.json`) are built, tested and released; the Linux notes below describe the intended setup but are not finished, and no Linux installers are published.
 
 A tray / menu-bar app that owns the MCP Hub daemon. It spawns the daemon on launch, shows the
 web UI (`packages/ui`, served by the daemon on `127.0.0.1`) in a window, and stops the daemon
@@ -120,4 +120,4 @@ Signing" in Keychain Access to undo it. After the first build with a new identit
 - Notifications (`tauri-plugin-notification`) for "service stopped" / "secrets forgotten".
 - Universal macOS build (`--target universal-apple-darwin`) needs both arch sidecars; extend
   `build-sidecars.mjs` to build per target.
-- CI matrix for macOS / Windows / Linux releases (Windows and Linux support is not finished yet).
+- CI matrix for Linux (macOS and Windows are in `.github/workflows/`; Linux support is not finished yet).

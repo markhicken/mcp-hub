@@ -21,11 +21,11 @@
 
 ## Cross-platform rules
 
-macOS is the reference platform and must not regress while other platforms are added (`WINDOWS-TODO.md`).
+macOS and Windows are both supported and tested, and neither may regress while the other changes or another platform (Linux) is added. macOS is the reference platform.
 
 - **Add platform behaviour beside the working code, don't rewrite it.** A new platform gets its own branch or module; the macOS path keeps calling the existing code unchanged. Don't refactor working macOS code in the same change as a new platform's additions.
 - **Test platform branches with injected inputs.** Take the platform and lookups (process table, signer, keystore) as parameters and feed fake data, so every platform's logic runs on macOS CI. Never loosen or skip a macOS test to make another platform pass; every new `skipIf(process.platform …)` needs a reason in a comment.
-- **CI must stay green on macOS** (`.github/workflows/ci.yml`, "Test (macOS)" is a required check). Before merging a platform milestone, run the macOS smoke list on a Mac: `npm test`; start the daemon; connect an app through the shim over `hub.sock`; approve it once; call a server; stop it and confirm no orphans; Save As dialog; Automation page; a `keychain://` read.
+- **CI must stay green on macOS and Windows.** `.github/workflows/ci.yml` runs "Test (macOS)" and "Test (Windows)" on every pull request (both are required checks), and `release.yml` runs the same steps (the shared `.github/actions/typecheck-and-test`) on macOS and Windows before it builds on a push to master; CI does not run on pushes, so merge through pull requests. Before merging a platform milestone, run the macOS smoke list on a Mac: `npm test`; start the daemon; connect an app through the shim over `hub.sock`; approve it once; call a server; stop it and confirm no orphans; Save As dialog; Automation page; a `keychain://` read.
 
 ## UI rules
 

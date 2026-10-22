@@ -1,13 +1,15 @@
 # Builds MCP Hub on every push or merge to master, and publishes it to GitHub Releases.
 #
-#   Every push to master:  typecheck, test, build the macOS installers (Apple silicon and Intel), keep them as
+#   Every push to master:  typecheck and test on macOS and Windows (the same steps CI runs on pull requests), then
+#                          build the installers (macOS: Apple silicon and Intel; Windows: x64 and ARM64), keep them as
 #                          workflow artifacts for two weeks.
 #   New version:           if the version in the repo has no GitHub Release yet, the installers are also published
 #                          as release v<version> (the tag is created for you). So a release is just: bump the
 #                          version (node scripts/version.mjs set 1.2.3), commit, merge to master.
 #                          Pushes that don't change the version build and test only, and publish nothing.
 #   Skipped entirely:      pushes that only touch docs (*.md), screenshots, tests or dev-only scripts (see
-#                          paths-ignore below). Note a push mixing those with app changes still runs.
+#                          paths-ignore below). Note a push mixing those with app changes still runs. Such changes
+#                          are tested by CI on their pull request, so keep merging through pull requests.
 #
 # The hub and the bridge are Node programs packaged with the Node that builds them (scripts/build-sidecars.mjs),
 # so each platform is built on its own runner: macOS (Apple silicon and Intel) and Windows (x64 and ARM64). To add
@@ -37,6 +39,7 @@ on:
       - "scripts/dev.mjs"
       - "scripts/screenshots/**"
       - "scripts/gen-desktop-icons.py"
+      - ".github/workflows/ci.yml"
       - ".gitignore"
       - "apps/desktop/.gitignore"
 
@@ -48,21 +51,20 @@ permissions:
   contents: read
 
 jobs:
-  # Fails fast, before anything slow starts: every file that carries the version must agree, and the code must pass.
+  # Fails fast, before anything slow starts: every file that carries the version must agree, and the code must pass on
+  # macOS and Windows. The steps are the same ones CI runs on pull requests (the shared action), so they can't drift apart.
   test:
-    name: Typecheck and test
-    runs-on: macos-latest
+    name: Typecheck and test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS, os: macos-latest }
+          - { name: Windows, os: windows-latest }
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-      - name: Versions agree with each other
-        run: node scripts/version.mjs check
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+      - uses: ./.github/actions/typecheck-and-test
 
   build:
     name: Build ${{ matrix.name }}

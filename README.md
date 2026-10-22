@@ -31,7 +31,7 @@ Each app connects through a small bridge that MCP Hub adds to its config. The fi
 
 ## Platform support
 
-**macOS is the tested platform; Windows is new.** Windows builds (per-user NSIS installer, x64 and ARM64) are produced by the release workflow and are not code-signed yet (SmartScreen will warn). Linux is not finished. You can [run it from source](#run-from-source) on any of them.
+**macOS and Windows are supported and tested** (CI runs the full test suite on both, and each release includes installers for both: macOS for Apple silicon and Intel, Windows for x64 and ARM64). Builds aren't code-signed yet, so macOS and SmartScreen warn on first run. Linux is not finished. You can [run it from source](#run-from-source) on any of them.
 
 ## Prerequisites
 

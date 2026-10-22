@@ -1,0 +1,23 @@
+name: Typecheck and test
+description: The steps that decide whether a change is good, shared by CI (pull requests) and the release workflow (pushes to master), so they can't drift apart.
+
+# Run `actions/checkout` first: a composite action that lives in the repository can only be found once the code is there.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24
+        cache: npm
+    - name: Versions agree with each other
+      shell: bash
+      run: node scripts/version.mjs check
+    - name: Install
+      shell: bash
+      run: npm ci
+    - name: Typecheck
+      shell: bash
+      run: npm run typecheck
+    - name: Test
+      shell: bash
+      run: npm test
