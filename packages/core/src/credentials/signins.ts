@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { renameWithRetry } from "../atomic-write.js";
 import type { OAuthClientInformationMixed, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { SecretBox } from "./box.js";
 
@@ -99,7 +100,7 @@ export class SignInStore {
     const tmp = `${this.file}.tmp`;
     const body: SignInsFile = { version: 1, algorithm: this.box.algorithm, signIns: Object.fromEntries(this.map) };
     writeFileSync(tmp, JSON.stringify(body, null, 2), { mode: 0o600 });
-    renameSync(tmp, this.file);
+    renameWithRetry(tmp, this.file);
     chmodSync(this.file, 0o600);
   }
 

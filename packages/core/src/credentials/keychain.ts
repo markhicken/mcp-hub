@@ -1,24 +1,7 @@
 import { run, ExecError } from "./exec.js";
+import { powerShellArgs } from "../powershell.js";
 import { CredentialError, type ProviderFactory } from "./types.js";
-
-const WIN_SCRIPT = `
-Add-Type -TypeDefinition @'
-using System; using System.Runtime.InteropServices;
-public class HubCred {
-  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
-  public struct CREDENTIAL { public int Flags; public int Type; public string TargetName; public string Comment; public long LastWritten; public int CredentialBlobSize; public IntPtr CredentialBlob; public int Persist; public int AttributeCount; public IntPtr Attributes; public string TargetAlias; public string UserName; }
-  [DllImport("advapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CredRead(string t, int type, int flags, out IntPtr p);
-  [DllImport("advapi32.dll")] static extern void CredFree(IntPtr p);
-  public static string Read(string t) {
-    IntPtr p; if (!CredRead(t, 1, 0, out p)) throw new Exception("not found");
-    try { var c = (CREDENTIAL)Marshal.PtrToStructure(p, typeof(CREDENTIAL)); return Marshal.PtrToStringUni(c.CredentialBlob, c.CredentialBlobSize / 2); }
-    finally { CredFree(p); }
-  }
-}
-'@
-[Console]::Out.Write([HubCred]::Read($env:HUB_TARGET))
-`;
-
+import { NOT_FOUND, READ_KEYCHAIN_SCRIPT, keychainTargets } from "./wincred.js";
 function parseRef(ref: string): { service: string; account: string } {
   const rest = ref.slice("keychain://".length);
   const i = rest.indexOf("/");
@@ -46,9 +29,9 @@ export const createKeychainProvider: ProviderFactory = (source, deps) => ({
         return stdout.replace(/\r?\n$/, "");
       }
       if (process.platform === "win32") {
-        const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WIN_SCRIPT], {
+        const { stdout } = await run("powershell.exe", powerShellArgs(READ_KEYCHAIN_SCRIPT), {
           timeoutMs: 30_000,
-          env: { ...deps.env, HUB_TARGET: service },
+          env: { ...deps.env, HUB_SERVICE: service, HUB_ACCOUNT: account, HUB_TARGETS: keychainTargets(service, account).join("\n") },
         });
         return stdout;
       }
@@ -59,6 +42,7 @@ export const createKeychainProvider: ProviderFactory = (source, deps) => ({
     } catch (err) {
       if (err instanceof ExecError) {
         if (err.code === "ENOENT") throw new CredentialError("Keychain tool not available on this system", "unavailable");
+        if (process.platform === "win32" && err.code === NOT_FOUND) throw new CredentialError(`No keychain entry for ${service}${account ? "/" + account : ""}`, "not-found");
         if (/could not be found|not found|SecKeychainSearchCopyNext/i.test(err.stderr + err.message)) {
           throw new CredentialError(`No keychain entry for ${service}${account ? "/" + account : ""}`, "not-found");
         }

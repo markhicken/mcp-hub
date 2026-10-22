@@ -37,7 +37,8 @@ describe("automatic credential setup", () => {
     expect(new ConfigStore((s as unknown as { path: string }).path).sources.some((x) => x.type === "keychain")).toBe(false);
   });
 
-  it("finds the 1Password CLI and reports its version without asking it for a secret", async () => {
+  // The fake `op` is a shebang script, which Windows can't run directly.
+  it.skipIf(process.platform === "win32")("finds the 1Password CLI and reports its version without asking it for a secret", async () => {
     const [st] = await detectSetup([op({ opPath: FAKE_OP })], process.env);
     expect(st).toMatchObject({ ready: true, version: "2.30.0", sourceId: "1password" });
     expect(st!.help).toBeUndefined();
@@ -57,7 +58,8 @@ describe("automatic credential setup", () => {
     if (process.platform === "darwin") expect(statuses[0]).toMatchObject({ ready: true, detail: "macOS Keychain is built in" });
   });
 
-  it("is available over the API", async () => {
+  // The fake `op` is a shebang script, which Windows can't run directly.
+  it.skipIf(process.platform === "win32")("is available over the API", async () => {
     const t = await startHub();
     try {
       await t.api("PUT", "/api/sources/1password", { options: { opPath: FAKE_OP } });

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { isMac } from "./lib";
 import { Badge, Button, useToast } from "./ui";
 
 interface Target {
@@ -37,6 +38,9 @@ export function AutomationPanel() {
       setBusy(null);
     }
   };
+
+  // AppleScript permissions only exist on macOS; other systems have nothing to check.
+  if (!isMac) return null;
 
   if (!targets?.length) return <div className="px-5 py-4 text-xs text-muted">{targets ? "No apps that servers usually control were found on this Mac." : "Looking for apps…"}</div>;
 

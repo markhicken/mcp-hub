@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
+import { atomicWriteFileSync } from "./atomic-write.js";
 import { SEAL_PREFIX, SecretBox } from "./credentials/box.js";
 import { normalizeSettings, type PersistedConfig, type ServerConfig, type Settings, type SourceConfig } from "./types.js";
 
@@ -221,9 +222,7 @@ export class ConfigStore {
 
   save(): void {
     mkdirSync(dirname(this.path), { recursive: true });
-    const tmp = `${this.path}.tmp`;
-    writeFileSync(tmp, JSON.stringify(this.data, null, 2), { mode: 0o600 });
-    renameSync(tmp, this.path);
+    atomicWriteFileSync(this.path, JSON.stringify(this.data, null, 2), { mode: 0o600 });
   }
 
   get servers(): ServerConfig[] {

@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { basename, dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { ClientGate, type GateOptions } from "./clients.js";
 import { ChildRegistry } from "./children.js";
-import { childrenPath } from "./paths.js";
+import { childrenPath, isPipePath } from "./paths.js";
 import { SecretBox } from "./credentials/box.js";
 import { CredentialBroker, type AccessEvent, type PromptEvent } from "./credentials/broker.js";
 import { SignInStore } from "./credentials/signins.js";
@@ -51,7 +51,7 @@ export interface HubOptions {
   extraOrigins?: string[];
   /** Disable OS notifications (tests). */
   quiet?: boolean;
-  /** Unix socket that approved apps connect through (macOS and Linux). */
+  /** Unix socket (macOS and Linux) or named pipe (Windows) that approved apps connect through. */
   socketPath?: string;
   /** Overrides for how connecting apps are identified (tests). */
   gate?: GateOptions;
@@ -128,7 +128,7 @@ export class Hub {
     // first run: if sealed data already exists, a missing key is reported instead of silently replaced.
     const secretsPath = join(opts.dataDir, "secrets.json");
     const signInsPath = join(opts.dataDir, "signins.json");
-    this.keyStore = opts.keyStore ?? osKeyStore();
+    this.keyStore = opts.keyStore ?? osKeyStore(opts.dataDir);
     const box = loadSecretBox(this.keyStore, { allowCreate: !ConfigStore.hasSealed(opts.configPath) && !existsSync(secretsPath) && !existsSync(signInsPath) });
     this.box = box;
     this.store = new ConfigStore(opts.configPath, box);
@@ -317,9 +317,10 @@ export class Hub {
 
   private async listenSocket(): Promise<void> {
     const path = this.opts.socketPath;
-    if (!path || process.platform === "win32") return;
-    // sun_path is limited to about 104 bytes on macOS.
-    if (Buffer.byteLength(path) > 100) {
+    if (!path) return;
+    const pipe = isPipePath(path);
+    // sun_path is limited to about 104 bytes on macOS. Named pipes have no such limit.
+    if (!pipe && Buffer.byteLength(path) > 100) {
       process.stderr.write(`Socket path is too long, so the local socket is disabled: ${path}\n`);
       return;
     }
@@ -329,7 +330,7 @@ export class Hub {
     server.requestTimeout = 0;
     server.headersTimeout = 30_000;
     try {
-      rmSync(path, { force: true });
+      if (!pipe) rmSync(path, { force: true });
       await new Promise<void>((ok, bad) => {
         server.once("error", bad);
         server.listen(path, () => {
@@ -337,7 +338,7 @@ export class Hub {
           ok();
         });
       });
-      chmodSync(path, 0o600);
+      if (!pipe) chmodSync(path, 0o600);
       this.socketServer = server;
     } catch (err) {
       process.stderr.write(`Could not open the local socket: ${(err as Error).message}\n`);
@@ -360,7 +361,7 @@ export class Hub {
       this.socketServer.close(() => r());
       this.socketServer.closeAllConnections?.();
     });
-    if (this.opts.socketPath) rmSync(this.opts.socketPath, { force: true });
+    if (this.opts.socketPath && !isPipePath(this.opts.socketPath)) rmSync(this.opts.socketPath, { force: true });
     await new Promise<void>((r) => {
       if (!this.server) return r();
       this.server.close(() => r());

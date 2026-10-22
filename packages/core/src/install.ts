@@ -1,5 +1,6 @@
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { renameWithRetry } from "./atomic-write.js";
 import { isDeepStrictEqual } from "node:util";
 import { applyEdits, getNodeValue, parse, parseTree, type Edit, type Node, type ParseError } from "jsonc-parser";
 import { addCodexServer, migrateCodexText, readCodexServers } from "./codex.js";
@@ -220,7 +221,7 @@ function writeInPlace(path: string, text: string): void {
   const tmp = join(dirname(real), `.${Date.now()}.mcp-hub.tmp`);
   writeFileSync(tmp, text, { mode });
   chmodSync(tmp, mode);
-  renameSync(tmp, real);
+  renameWithRetry(tmp, real);
 }
 
 const KEEP_BACKUPS = 10;

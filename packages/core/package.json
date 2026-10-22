@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
-    "dev": "tsx watch src/cli.ts",
+    "dev": "node --watch --watch-preserve-output --import tsx src/cli.ts",
     "start": "tsx src/cli.ts",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc -p tsconfig.json",

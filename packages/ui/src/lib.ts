@@ -1,5 +1,11 @@
 import type { ServerConfig } from "./types";
 
+const platformName = typeof navigator === "undefined" ? "" : navigator.platform || "";
+export const isMac = /^(mac|darwin)/i.test(platformName);
+export const isWindows = /^win/i.test(platformName);
+/** What this system calls its file manager, for labels such as "Show in Finder". */
+export const fileManager = isMac ? "Finder" : isWindows ? "Explorer" : "file manager";
+
 export function formatBytes(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];

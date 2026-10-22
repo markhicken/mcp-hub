@@ -7,6 +7,14 @@ import { vi } from "vitest";
 const SECRET_TOOLS = new Set(["op", "vault", "security", "secret-tool", "powershell", "pwsh"]);
 const allowedDirs = [join(import.meta.dirname, "fixtures"), tmpdir()].map((d) => resolve(d));
 
+// Tests point the home directory at a temp folder with `process.env.HOME`. Windows' `os.homedir()` reads USERPROFILE
+// instead, so follow HOME there too; elsewhere this is what `homedir()` already does.
+vi.mock("node:os", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:os")>();
+  const homedir = () => (process.platform === "win32" && process.env.HOME ? process.env.HOME : actual.homedir());
+  return { ...actual, homedir, default: { ...actual, homedir } };
+});
+
 vi.mock("../src/credentials/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/credentials/exec.js")>();
   return {

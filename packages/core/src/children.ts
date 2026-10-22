@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { taskkillTree, windowsProcesses } from "./proc.js";
 
 interface Entry {
   pid: number;
@@ -25,10 +26,14 @@ function read(path: string): Entry[] {
   }
 }
 
-/** Every process on the machine as pid -> {ppid, command}. Empty where `ps` isn't available (Windows). */
-function processes(): Map<number, { ppid: number; command: string }> {
+/** Every process on the machine as pid -> {ppid, command}. `ps` on macOS/Linux, one CIM query on Windows. */
+async function processes(): Promise<Map<number, { ppid: number; command: string }>> {
   const map = new Map<number, { ppid: number; command: string }>();
-  if (process.platform === "win32") return map;
+  if (process.platform === "win32") {
+    // Fresh: what a server started a moment ago must show up. The command is the program plus its arguments.
+    for (const [pid, p] of await windowsProcesses({ fresh: true })) map.set(pid, { ppid: p.ppid, command: `${p.command} ${p.cmdline}` });
+    return map;
+  }
   try {
     const out = execFileSync("ps", ["-axo", "pid=,ppid=,command="], { encoding: "utf-8", maxBuffer: 32 * 1024 * 1024 });
     for (const line of out.split("\n")) {
@@ -41,9 +46,9 @@ function processes(): Map<number, { ppid: number; command: string }> {
   return map;
 }
 
-/** `pid` and everything it started, found from the process table. Empty where `ps` isn't available (Windows). */
-export function descendantsOf(pid: number): number[] {
-  const all = processes();
+/** `pid` and everything it started, found from the process table (without `pid` itself). Empty if the table can't be read. */
+export async function descendantsOf(pid: number): Promise<number[]> {
+  const all = await processes();
   const found: number[] = [];
   const queue = [pid];
   while (queue.length) {
@@ -57,11 +62,13 @@ export function descendantsOf(pid: number): number[] {
 
 /**
  * Stops processes a server left behind after it was stopped (the real server behind a wrapper, helpers it forked).
- * Polite first, then forced for any that ignore it.
+ * Polite first, then forced for any that ignore it. Windows has no polite signal, so each is ended with its own tree.
  */
 export async function stopLeftovers(pids: number[], grace = 2000): Promise<void> {
   const live = pids.filter(alive);
   if (!live.length) return;
+  if (process.platform === "win32") return taskkillTree(live);
+
   const send = (sig: NodeJS.Signals) => {
     for (const pid of live.filter(alive)) {
       try {
@@ -113,8 +120,8 @@ export class ChildRegistry {
   async sweep(grace = 1500): Promise<number> {
     const entries = read(this.path);
     rmSync(this.path, { force: true });
-    if (!entries.length || process.platform === "win32") return 0;
-    const all = processes();
+    if (!entries.length) return 0;
+    const all = await processes();
     const targets = new Set<number>();
     for (const e of entries) {
       const p = all.get(e.pid);
@@ -126,6 +133,10 @@ export class ChildRegistry {
         targets.add(pid);
         for (const [child, info] of all) if (info.ppid === pid) queue.push(child);
       }
+    }
+    if (process.platform === "win32") {
+      await taskkillTree([...targets]);
+      return targets.size;
     }
     const signal = (sig: NodeJS.Signals) => {
       for (const pid of targets) {

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { ChildRegistry } from "./children.js";
 import { Hub } from "./hub.js";
 import { childrenPath, configPath, dataDir, historyDbPath, runtimePath, socketPath, usageDbPath } from "./paths.js";
-import { loadShellEnv } from "./system.js";
+import { loadShellEnv, mergeEnv } from "./system.js";
 import { VERSION } from "./version.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -64,7 +64,7 @@ export async function main(): Promise<void> {
   if (swept) process.stderr.write(`Stopped ${swept} leftover MCP server process${swept === 1 ? "" : "es"} from a previous run\n`);
 
   const shellEnv = await loadShellEnv();
-  const baseEnv = { ...process.env, ...shellEnv };
+  const baseEnv = mergeEnv(process.env, shellEnv);
   for (const k of Object.keys(baseEnv)) if (k.startsWith("MCP_HUB_")) delete baseEnv[k];
 
   const uiToken = process.env.MCP_HUB_TOKEN || randomBytes(24).toString("base64url");
@@ -118,6 +118,8 @@ export async function main(): Promise<void> {
   process.on("SIGINT", () => void shutdown());
   process.on("SIGTERM", () => void shutdown());
   process.on("SIGHUP", () => void shutdown());
+  // Windows: Ctrl+Break and closing the console window.
+  process.on("SIGBREAK", () => void shutdown());
   // The desktop shell keeps our stdin open; if it dies, so do we.
   if (process.argv.includes("--exit-on-stdin-close")) {
     process.stdin.resume();

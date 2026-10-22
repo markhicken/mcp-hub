@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { ClientGate, resolveClient, type ProcInfo } from "../src/clients.js";
+import { socketPath } from "../src/paths.js";
 import { MOCK, startHub, waitFor, type TestHub } from "./helpers.js";
 
 const SHIM = join(import.meta.dirname, "..", "..", "shim", "src", "shim.mjs");
@@ -50,12 +51,75 @@ describe("client identification", () => {
   });
 });
 
+describe("Windows client identification", () => {
+  // The fake table is made of Windows-shaped paths, so these run on every platform.
+  const win = (rows: Array<[number, number, string]>, cmdlines: Record<number, string> = {}) => {
+    const t = table(rows);
+    return { lookup: t.lookup, args: async (pid: number) => cmdlines[pid] ?? "" };
+  };
+  const CLAUDE = "C:\\Users\\me\\AppData\\Local\\AnthropicClaude\\app-0.9.2\\claude.exe";
+
+  it("treats an Electron app and its helpers as one client, across updates", async () => {
+    const t = win([
+      [1100, 100, "C:\\Program Files\\MCP Hub\\mcp-hub-stdio.exe"],
+      [100, 50, CLAUDE],
+      [50, 20, CLAUDE],
+      [20, 4, "C:\\Windows\\explorer.exe"],
+    ]);
+    const a = await resolveClient(1100, t.lookup, t.args);
+    expect(a).toMatchObject({ name: "claude", pid: 50, path: CLAUDE });
+    expect(a?.identity).toBe("app:c:\\users\\me\\appdata\\local\\anthropicclaude|claude");
+    // The next version lives in another app-x.y.z folder but is the same app.
+    const updated = await resolveClient(1100, win([[1100, 50, "x"], [50, 1, CLAUDE.replace("app-0.9.2", "app-0.9.3")]]).lookup, t.args);
+    expect(updated?.identity).toBe(a?.identity);
+  });
+
+  it("gives an MSIX package one identity whatever its version", async () => {
+    const pkg = (v: string) => `C:\\Program Files\\WindowsApps\\Claude_${v}_x64__abc123\\app\\Claude.exe`;
+    const id = async (v: string) => (await resolveClient(9, win([[9, 8, "shim.exe"], [8, 1, pkg(v)]]).lookup, async () => ""))?.identity;
+    expect(await id("1.2.3.0")).toBe(await id("1.3.0.0"));
+    expect(await id("1.2.3.0")).toContain("claude_*_x64__abc123");
+  });
+
+  it("looks past cmd, PowerShell and the terminal, and names a CLI by its script", async () => {
+    const t = win(
+      [
+        [900, 300, "C:\\Program Files\\MCP Hub\\mcp-hub-stdio.exe"],
+        [300, 200, "C:\\Windows\\System32\\cmd.exe"],
+        [200, 150, "C:\\Program Files\\nodejs\\node.exe"],
+        [150, 120, "C:\\Program Files\\PowerShell\\7\\pwsh.exe"],
+        [120, 100, "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.0.0.0_x64__8wekyb3d8bbwe\\WindowsTerminal.exe"],
+      ],
+      { 200: '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@acme\\cli\\bin\\run.js" --flag' },
+    );
+    expect(await resolveClient(900, t.lookup, t.args)).toMatchObject({ name: "@acme/cli", pid: 200 });
+  });
+
+  it("falls back to the terminal when only shells are above the bridge", async () => {
+    const t = win([
+      [900, 300, "C:\\x\\mcp-hub-stdio.exe"],
+      [300, 120, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"],
+      [120, 1, "C:\\Program Files\\WindowsApps\\Microsoft.WindowsTerminal_1.0.0.0_x64__8wekyb3d8bbwe\\WindowsTerminal.exe"],
+    ]);
+    expect((await resolveClient(900, t.lookup, t.args))?.name).toBe("WindowsTerminal");
+  });
+
+  it("ignores a parent whose pid was reused by a newer process", async () => {
+    const procs = new Map<number, ProcInfo>([
+      [900, { pid: 900, ppid: 50, started: "1000", command: "C:\\x\\mcp-hub-stdio.exe" }],
+      // pid 50 now belongs to a process that started after the bridge: the real parent is long gone.
+      [50, { pid: 50, ppid: 4, started: "5000", command: "C:\\Other\\other.exe" }],
+    ]);
+    expect(await resolveClient(900, async (pid) => procs.get(pid) ?? null, async () => "")).toBeNull();
+  });
+});
+
 describe("approval gate", () => {
   const fake = table([
     [10, 1, "/Applications/Fake Client.app/Contents/MacOS/Fake Client"],
   ]);
   const lookup = async (pid: number) => (pid === 10 ? fake.lookup(10) : { pid, ppid: 10, started: `s${pid}`, command: "shim" });
-  const mk = (extra = {}) => new ClientGate({ lookup, args: fake.args, waitMs: 80, ...extra });
+  const mk = (extra = {}) => new ClientGate({ lookup, args: fake.args, waitMs: 80, signer: async () => "", ...extra });
 
   it("asks once per app, whatever the number of connections", async () => {
     const g = mk();
@@ -118,13 +182,14 @@ describe("approval gate", () => {
   });
 });
 
-describe.skipIf(process.platform === "win32")("local socket", () => {
+describe("local socket", () => {
   let t: TestHub;
+  let home: string;
 
   beforeAll(async () => {
     const fake = table([[4242, 1, "/Applications/Fake Client.app/Contents/MacOS/Fake Client"]]);
     const lookup = async (pid: number) => (pid === 4242 ? fake.lookup(4242) : { pid, ppid: 4242, started: `s${pid}`, command: "shim" });
-    const dirless = { gate: { lookup, args: fake.args, alive: () => true, waitMs: 100 } };
+    const dirless = { gate: { lookup, args: fake.args, alive: () => true, waitMs: 100, signer: async () => "" } };
     t = await startHubWithSocket(dirless);
     await t.api("PUT", "/api/settings", { allowTcpMcp: false });
     await t.api("POST", "/api/servers", { name: "Mock", transport: "stdio", command: process.execPath, args: [MOCK] });
@@ -139,8 +204,10 @@ describe.skipIf(process.platform === "win32")("local socket", () => {
     const { mkdtempSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
     const dir = mkdtempSync(join(tmpdir(), "mcp-hub-sock-"));
-    const hubT = await startHub({}, { dataDir: dir, configPath: join(dir, "config.json"), socketPath: join(dir, "hub.sock"), ...gate });
-    writeFileSync(join(dir, "runtime.json"), JSON.stringify({ port: hubT.hub.port, socket: hubT.hub.socket }));
+    home = dir;
+    // A Unix socket in the data directory, or on Windows a named pipe.
+    const hubT = await startHub({}, { dataDir: dir, configPath: join(dir, "config.json"), socketPath: socketPath(dir), ...gate });
+    writeFileSync(join(dir, "runtime.json"), JSON.stringify({ pid: process.pid, port: hubT.hub.port, socket: hubT.hub.socket }));
     return hubT;
   }
 
@@ -151,7 +218,7 @@ describe.skipIf(process.platform === "win32")("local socket", () => {
   });
 
   it("lets an approved app use every server through the bridge", async () => {
-    const child = spawn(process.execPath, [SHIM, "mock"], { env: { ...process.env, MCP_HUB_HOME: t.hub.socket!.replace(/\/hub\.sock$/, "") }, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [SHIM, "mock"], { env: { ...process.env, MCP_HUB_HOME: home }, stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     child.stdout.on("data", (d: Buffer) => (out += d.toString()));
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "0" } } }) + "\n");
@@ -189,7 +256,7 @@ describe.skipIf(process.platform === "win32")("local socket", () => {
   it("tells the app when the user said no", async () => {
     const id = t.hub.clients.list()[0]!.id;
     await t.api("POST", `/api/clients/${encodeURIComponent(id)}/decision`, { allow: false });
-    const child = spawn(process.execPath, [SHIM, "mock"], { env: { ...process.env, MCP_HUB_HOME: t.hub.socket!.replace(/\/hub\.sock$/, "") }, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [SHIM, "mock"], { env: { ...process.env, MCP_HUB_HOME: home }, stdio: ["pipe", "pipe", "pipe"] });
     let out = "";
     child.stdout.on("data", (d: Buffer) => (out += d.toString()));
     child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 7, method: "initialize", params: { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t", version: "0" } } }) + "\n");

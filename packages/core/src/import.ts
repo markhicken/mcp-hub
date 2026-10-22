@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { parse, type ParseError } from "jsonc-parser";
@@ -35,6 +35,24 @@ export function codexHome(): string {
   return process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
 }
 
+/**
+ * The Microsoft Store (MSIX) build of Claude Desktop keeps its config inside the package's own copy of AppData
+ * (`%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude`), not in `%APPDATA%`. Returns that file if it exists.
+ */
+function msixClaudeConfig(): string | undefined {
+  const packages = join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "Packages");
+  try {
+    for (const dir of readdirSync(packages)) {
+      if (!/^Claude_/i.test(dir)) continue;
+      const file = join(packages, dir, "LocalCache", "Roaming", "Claude", "claude_desktop_config.json");
+      if (existsSync(file)) return file;
+    }
+  } catch {
+    // no Packages folder: not Windows, or nothing installed from the Store
+  }
+  return undefined;
+}
+
 export function candidatePaths(): ClientConfigFile[] {
   const home = homedir();
   const appData = process.env.APPDATA ?? join(home, "AppData", "Roaming");
@@ -49,7 +67,7 @@ export function candidatePaths(): ClientConfigFile[] {
     process.platform === "darwin"
       ? join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
       : process.platform === "win32"
-        ? join(appData, "Claude", "claude_desktop_config.json")
+        ? (msixClaudeConfig() ?? join(appData, "Claude", "claude_desktop_config.json"))
         : join(configHome, "Claude", "claude_desktop_config.json");
   return [
     { client: "Claude Desktop", path: desktop, shape: "mcpServers", key: "mcpServers" },
@@ -66,7 +84,28 @@ export function candidatePaths(): ClientConfigFile[] {
 
 type Raw = Record<string, any>;
 
-const INJECTOR = /(^|\/)inject-1password-secrets\.sh$/;
+const INJECTOR = /(^|[\\/])inject-1password-secrets\.sh$/;
+
+/**
+ * Windows apps run `npx` and other `.cmd` programs through the command interpreter, as `cmd /c npx -y server`.
+ * The hub starts programs itself (with the same PATH), so the wrapper is dropped and the entry is what it ran.
+ * Entries that aren't a `cmd /c …` call come back unchanged.
+ */
+export function unwrapCmdShell(raw: Raw): Raw {
+  if (!raw || typeof raw.command !== "string") return raw;
+  if (!/^cmd(\.exe)?$/i.test(raw.command.split(/[\\/]/).pop()!)) return raw;
+  const args: string[] = Array.isArray(raw.args) ? raw.args.map(String) : [];
+  const flags = new Set(["/d", "/s", "/c", "/q", "/v:off"]);
+  let i = 0;
+  while (i < args.length && flags.has(args[i]!.toLowerCase())) i++;
+  if (!args.slice(0, i).some((a) => a.toLowerCase() === "/c") || i >= args.length) return raw;
+  const rest = args.slice(i);
+  // `cmd /c "npx -y server"` passes the whole command line as one argument.
+  const words = rest.length === 1 && /\s/.test(rest[0]!) ? [...rest[0]!.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2] ?? "") : rest;
+  const [command, ...others] = words;
+  if (!command || /[&|<>^%]/.test(words.join(" "))) return raw; // shell syntax: leave it to cmd
+  return { ...raw, command, args: others };
+}
 
 /** Wrap every op:// reference in {{ }} so the hub's credential broker resolves it (quotes around a reference are dropped). */
 function wrapRefs(value: string): string {
@@ -264,7 +303,7 @@ const mapValues = (o: unknown): Record<string, string> | undefined =>
 /** Convert one client-config entry into a hub server definition. Returns null if unusable. */
 export function toServerConfig(name: string, input: Raw): ServerConfig | null {
   if (!input || typeof input !== "object") return null;
-  const raw = unwrapRemoteBridge(unwrapInjector(input));
+  const raw = unwrapRemoteBridge(unwrapInjector(unwrapCmdShell(input)));
   // Cline and Cursor mark a server off with `disabled: true`; keep it off rather than starting it.
   const enabled = raw.disabled !== true && raw.enabled !== false;
   const base = { id: slugify(name), name, enabled, lifecycle: "keep-alive" as const };

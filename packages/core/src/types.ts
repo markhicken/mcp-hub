@@ -181,8 +181,8 @@ export const DEFAULT_SETTINGS: Settings = {
   cacheTtlSeconds: 0,
   denialCooldownSeconds: 10,
   requireClientToken: false,
-  // Unix sockets need no flag; Windows has no socket support yet, so it keeps the HTTP endpoint on.
-  allowTcpMcp: process.platform === "win32",
+  // Apps reach the hub over a local socket (a Unix socket, or a named pipe on Windows), so the HTTP endpoint is opt-in.
+  allowTcpMcp: false,
   clientToken: "",
   retentionDays: 30,
   notifyOnCredentialPrompt: true,

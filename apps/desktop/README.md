@@ -1,6 +1,6 @@
 # MCP Hub desktop (Tauri v2)
 
-> **Status:** only the macOS app is built and tested. The Windows and Linux notes below describe the intended setup but are not finished or verified, and no Windows or Linux installers are published.
+> **Status:** the macOS app is the tested one. The Windows build (per-user NSIS installer, `tauri.windows.conf.json`) is new and is being verified on real machines; the Linux notes below describe the intended setup but are not finished, and no Linux installers are published.
 
 A tray / menu-bar app that owns the MCP Hub daemon. It spawns the daemon on launch, shows the
 web UI (`packages/ui`, served by the daemon on `127.0.0.1`) in a window, and stops the daemon
@@ -27,8 +27,10 @@ when you quit.
 ## Prerequisites
 
 Node 24, npm, a Rust toolchain (`rustup`), and the platform's Tauri
-[prerequisites](https://v2.tauri.app/start/prerequisites/) (Xcode CLT on macOS; WebView2 on
-Windows; `webkit2gtk-4.1` and `libayatana-appindicator3` on Linux — the tray icon needs the latter).
+[prerequisites](https://v2.tauri.app/start/prerequisites/) (Xcode CLT on macOS; the Visual Studio Build Tools
+"Desktop development with C++" workload, plus WebView2 (built into Windows 10/11), on
+Windows; `webkit2gtk-4.1` and `libayatana-appindicator3` on Linux — the tray icon needs the latter). The root
+[README](../../README.md#prerequisites) has the one-line install commands. Open a new terminal after installing Rust so `cargo` is on PATH.
 
 Rust 1.86 is enough: `src-tauri/.cargo/config.toml` makes Cargo pick dependency versions that
 support the declared `rust-version`. Delete that file when you move to Rust ≥ 1.90.

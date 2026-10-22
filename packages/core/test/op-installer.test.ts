@@ -87,7 +87,8 @@ describe("1Password CLI installer", () => {
 });
 
 describe("installing the CLI from the app", () => {
-  it("installs, points the 1Password source at it, and shares one download between simultaneous requests", async () => {
+  // The fake `op` is a shebang script, which Windows can't run directly.
+  it.skipIf(process.platform === "win32")("installs, points the 1Password source at it, and shares one download between simultaneous requests", async () => {
     let calls = 0;
     const fake = join(import.meta.dirname, "fixtures", "fake-op.mjs");
     chmodSync(fake, 0o755);

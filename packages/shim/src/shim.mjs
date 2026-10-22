@@ -5,15 +5,36 @@
 //
 // Environment: MCP_HUB_URL, MCP_HUB_CLIENT_TOKEN, MCP_HUB_HOME (to find runtime.json).
 // Zero dependencies on purpose so it starts fast and can be packaged as a tiny executable.
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import http from "node:http";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_PORT = 47615;
+
+const isPipe = (p) => /^\\\\[.?]\\pipe\\/i.test(p);
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === "EPERM";
+  }
+}
+
+/**
+ * Is the hub's socket worth trying? A Unix socket is a file. A Windows named pipe is not reliably visible to
+ * `existsSync` (probing it can even take a pipe instance), so the pipe is trusted while the hub that made it is alive;
+ * a leftover runtime.json from a crashed hub names a dead pid, and the shim then falls back to HTTP.
+ */
+function socketUsable(rt) {
+  if (!rt.socket) return false;
+  return isPipe(rt.socket) ? Boolean(rt.pid) && pidAlive(rt.pid) : existsSync(rt.socket);
+}
 
 function dataDir() {
   if (process.env.MCP_HUB_HOME) return process.env.MCP_HUB_HOME;
@@ -45,7 +66,7 @@ export function discover(opts) {
       base = `http://127.0.0.1:${rt.port}`;
       if (!token && rt.clientToken) token = rt.clientToken;
       // The socket is the normal way in: the hub asks the user to approve this app once.
-      if (rt.socket && existsSync(rt.socket)) socket = rt.socket;
+      if (socketUsable(rt)) socket = rt.socket;
     } catch {
       base = `http://127.0.0.1:${DEFAULT_PORT}`;
     }
@@ -53,7 +74,7 @@ export function discover(opts) {
   return { base: base.replace(/\/+$/, ""), token, socket };
 }
 
-/** fetch over the hub's Unix socket, returning a standard Response. */
+/** fetch over the hub's local socket (a Unix socket, or a Windows named pipe), returning a standard Response. */
 function socketFetch(socketPath, url, init = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
@@ -278,12 +299,28 @@ export async function run(argv = process.argv.slice(2), io = { stdin: process.st
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+/** Is this file the program being run? Compares real paths (a symlinked install or folder makes `argv[1]` differ from `import.meta.url`); Windows ignores case, and a single executable may be launched by a bare name without `.exe`. */
+function isMain() {
+  if (!process.argv[1]) return false;
+  const real = (p) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  const norm = (p) => (process.platform === "win32" ? real(p).toLowerCase().replace(/\.exe$/, "") : real(p));
+  return norm(fileURLToPath(import.meta.url)) === norm(process.argv[1]);
+}
+
+if (isMain()) {
+  // Windows pipes can still hold unwritten output when the process ends; let it drain before exiting.
+  const exit = (code) => process.stdout.write("", () => process.exit(code));
   run().then(
-    () => process.exit(0),
+    () => exit(0),
     (err) => {
       process.stderr.write(`mcp-hub-stdio: ${err?.stack || err}\n`);
-      process.exit(1);
+      exit(1);
     },
   );
 }

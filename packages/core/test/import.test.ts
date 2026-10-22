@@ -32,7 +32,7 @@ describe("import", () => {
       "/work/.env-dev": '# dev\nAPI_KEY=op://Private/Firewalla/key\nexport MODE="dev mode"\nPLAIN=yes # note\nMSG=\'op://V/I/f\'\n',
       "/work/more.env": "MODE=prod\n",
     };
-    const read = (p: string) => files[p] ?? null;
+    const read = (p: string) => files[p.replace(/\\/g, "/")] ?? null;
     const entry = {
       command: "op",
       args: ["run", "--no-masking", "--env-file=/work/.env-dev", "--env-file", "/work/more.env", "--", "/usr/bin/node", "/x/npm-cli.js", "run", "dev"],
