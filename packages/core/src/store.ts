@@ -206,14 +206,16 @@ export class ConfigStore {
     const servers = stored.map((s) => this.seal(s));
     this.needsSave = servers.some((s, i) => JSON.stringify(s) !== JSON.stringify(stored[i]));
     const cfg: PersistedConfig = { version: 1, servers, sources, settings };
-    // 1Password and the OS keychain are set up once on first run (or the first run after this was added), so
-    // references like {{op://…}} and {{keychain://…}} work with no setup. Removing one later keeps it removed.
+    // The OS keychain is set up once on first run (or the first run after this was added), so references like
+    // {{keychain://…}} work with no setup. 1Password starts out off: it needs a tool and an approval the user hasn't
+    // asked for, so it is only used once switched on. (Vault is added off by `autoConfigureVault` for people who
+    // use it.) Removing one later keeps it removed, and an install that already has them keeps whatever it chose.
     if (!settings.sourcesAutoConfigured) {
-      for (const [type, name] of [
-        ["1password", "1Password"],
-        ["keychain", "OS keychain"],
+      for (const [type, name, enabled] of [
+        ["keychain", "OS keychain", true],
+        ["1password", "1Password", false],
       ] as const) {
-        if (!sources.some((x) => x.type === type)) sources.push({ id: type, type, name, enabled: true, options: {} });
+        if (!sources.some((x) => x.type === type)) sources.push({ id: type, type, name, enabled, options: {} });
       }
       settings.sourcesAutoConfigured = true;
     }

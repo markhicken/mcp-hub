@@ -1,7 +1,7 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { basename, dirname, extname, join, normalize, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, normalize, resolve, sep } from "node:path";
 import { ClientGate, type GateOptions } from "./clients.js";
 import { ChildRegistry } from "./children.js";
 import { childrenPath, isPipePath } from "./paths.js";
@@ -10,6 +10,7 @@ import { CredentialBroker, type AccessEvent, type PromptEvent } from "./credenti
 import { SignInStore } from "./credentials/signins.js";
 import { loadSecretBox, osKeyStore, type KeyStore } from "./credentials/keystore.js";
 import { run as runCommand } from "./credentials/exec.js";
+import { findCommand } from "./credentials/which.js";
 import { installOnePasswordCli, type InstalledCli } from "./credentials/op-installer.js";
 import { detectSetup } from "./credentials/setup.js";
 import { installVaultCli } from "./credentials/vault-installer.js";
@@ -59,6 +60,8 @@ export interface HubOptions {
   installOnePasswordCli?: (toolsDir: string) => Promise<InstalledCli>;
   /** Replaces the Vault CLI download (tests). */
   installVaultCli?: (toolsDir: string) => Promise<InstalledCli>;
+  /** Finds a command on this machine (`where.exe` / `which`). Tests replace it so they never depend on what is installed. */
+  locateCommand?: (name: string, env: NodeJS.ProcessEnv) => Promise<string | null>;
   /** Where the master encryption key is kept. Defaults to the OS keychain; tests pass an in-memory one. */
   keyStore?: KeyStore;
   /** Shows a "Save As" dialog: the chosen path, null if cancelled, undefined if the platform has none. Tests replace it. */
@@ -218,8 +221,9 @@ export class Hub {
 
   /**
    * People who use Vault already have VAULT_ADDR in their shell. When it is set, add a Vault source that uses it, so
-   * {{vault://…}} works with nothing to fill in. Nobody else is shown anything about Vault. Done once, so removing
-   * the source later sticks.
+   * {{vault://…}} is ready to switch on with nothing to fill in. It starts out off, like 1Password, so nothing talks
+   * to Vault until the user turns it on. Nobody else is shown anything about Vault. Done once, so removing the
+   * source later sticks.
    */
   private autoConfigureVault(): void {
     const { store } = this;
@@ -227,9 +231,29 @@ export class Hub {
     const env = this.baseEnvCache();
     if (!env.VAULT_ADDR) return;
     if (!store.sources.some((s) => s.type === "vault")) {
-      store.upsertSource({ id: "vault", type: "vault", name: "HashiCorp Vault", enabled: true, options: { mount: "secret", kvVersion: "2", tokenSource: env.VAULT_TOKEN ? "env" : "file" } });
+      store.upsertSource({ id: "vault", type: "vault", name: "HashiCorp Vault", enabled: false, options: { mount: "secret", kvVersion: "2", tokenSource: env.VAULT_TOKEN ? "env" : "file" } });
     }
     store.updateSettings({ vaultAutoConfigured: true });
+  }
+
+  /**
+   * Finds the 1Password CLI the way a person would (`where.exe op` / `which op`) and saves the path on the source, so it
+   * is used from then on whatever PATH the app was started with. A path that is already set and exists is left alone;
+   * a missing one is replaced. Returns the source to test and the path that was saved (null if nothing changed), or
+   * null if the command can't be found (the test then reports that).
+   */
+  private async locateOnePassword(src: SourceConfig): Promise<{ source: SourceConfig; saved: string | null } | null> {
+    const current = src.options.opPath;
+    if (current && isAbsolute(current) && existsSync(current)) return null;
+    // A bare name other than `op` (say `op2`) is looked up as written.
+    const name = current && !isAbsolute(current) ? current : "op";
+    const found = await (this.opts.locateCommand ?? ((n, env) => findCommand(n, env)))(name, this.baseEnvCache());
+    if (!found || found === current) return null;
+    const source: SourceConfig = { ...src, options: { ...src.options, opPath: found } };
+    this.store.upsertSource(source);
+    this.broker.invalidateSource(src.id);
+    this.manager.notifyChange();
+    return { source, saved: found };
   }
 
   get port(): number {
@@ -660,12 +684,12 @@ export class Hub {
     if (m === "POST" && (r = /^\/api\/servers\/([^/]+)\/install$/.exec(p))) {
       const id = decodeURIComponent(r[1]!);
       if (!manager.get(id)) throw new HttpError(404, "No such server");
-      const body = (await readJson(req)) as { clients?: unknown; dryRun?: unknown; replace?: unknown; transport?: unknown };
+      const body = (await readJson(req)) as { clients?: unknown; dryRun?: unknown; replace?: unknown; transport?: unknown; create?: unknown };
       const apps = knownApps().map((a) => a.client);
       if (!Array.isArray(body?.clients) || !body.clients.length || body.clients.some((c) => typeof c !== "string" || !apps.includes(c))) {
         throw new HttpError(400, "clients must list one or more known apps");
       }
-      for (const flag of [body.dryRun, body.replace]) if (flag !== undefined && typeof flag !== "boolean") throw new HttpError(400, "dryRun and replace must be true or false");
+      for (const flag of [body.dryRun, body.replace, body.create]) if (flag !== undefined && typeof flag !== "boolean") throw new HttpError(400, "dryRun, replace and create must be true or false");
       if (body.transport !== undefined && body.transport !== "bridge" && body.transport !== "http") throw new HttpError(400, 'transport must be "bridge" or "http"');
       // Direct HTTP is only offered while the hub accepts it; the token goes in only when the hub asks for one.
       const s = this.store.settings;
@@ -674,23 +698,26 @@ export class Hub {
       if (!http && !this.opts.shim) throw new HttpError(400, "The MCP Hub bridge (mcp-hub-stdio) was not found, so there is nothing to install. Use the packaged MCP Hub app.");
       const bridge = this.opts.shim ?? { command: "", args: [] };
       // A dry run only reports what would change (which entries would be replaced); nothing is written.
-      if (body.dryRun) return json(res, 200, { preview: previewInstall(id, body.clients as string[], bridge, undefined, { http }) });
-      return json(res, 200, { results: installServer(id, body.clients as string[], bridge, undefined, { replace: body.replace === true, http }) });
+      // A config file that doesn't exist is only created when the request says so (`create`), after the user was asked.
+      const create = body.create === true;
+      if (body.dryRun) return json(res, 200, { preview: previewInstall(id, body.clients as string[], bridge, undefined, { http, create }) });
+      return json(res, 200, { results: installServer(id, body.clients as string[], bridge, undefined, { replace: body.replace === true, http, create }) });
     }
 
     // Adds several servers' MCP Hub entries to one app's config file in a single, backed-up edit.
     if (m === "POST" && p === "/api/install") {
-      const body = (await readJson(req)) as { client?: unknown; servers?: unknown; dryRun?: unknown; replace?: unknown };
+      const body = (await readJson(req)) as { client?: unknown; servers?: unknown; dryRun?: unknown; replace?: unknown; create?: unknown };
       const apps = knownApps().map((a) => a.client);
       if (typeof body?.client !== "string" || !apps.includes(body.client)) throw new HttpError(400, "client must be a known app");
       if (!Array.isArray(body.servers) || !body.servers.length || body.servers.some((s) => typeof s !== "string" || !manager.get(s))) {
         throw new HttpError(400, "servers must list one or more existing servers");
       }
-      for (const flag of [body.dryRun, body.replace]) if (flag !== undefined && typeof flag !== "boolean") throw new HttpError(400, "dryRun and replace must be true or false");
+      for (const flag of [body.dryRun, body.replace, body.create]) if (flag !== undefined && typeof flag !== "boolean") throw new HttpError(400, "dryRun, replace and create must be true or false");
       if (!this.opts.shim) throw new HttpError(400, "The MCP Hub bridge (mcp-hub-stdio) was not found, so there is nothing to install. Use the packaged MCP Hub app.");
       const ids = [...new Set(body.servers as string[])];
-      if (body.dryRun) return json(res, 200, { preview: previewInstallServers(ids, body.client, this.opts.shim) });
-      return json(res, 200, { result: installServers(ids, body.client, this.opts.shim, undefined, { replace: body.replace === true }) });
+      const create = body.create === true;
+      if (body.dryRun) return json(res, 200, { preview: previewInstallServers(ids, body.client, this.opts.shim, undefined, { create }) });
+      return json(res, 200, { result: installServers(ids, body.client, this.opts.shim, undefined, { replace: body.replace === true, create }) });
     }
 
     if (m === "POST" && (r = /^\/api\/servers\/([^/]+)\/(enable|disable|restart|signin|signout)$/.exec(p))) {
@@ -765,9 +792,13 @@ export class Hub {
       }
     }
     if (m === "POST" && (r = /^\/api\/sources\/([^/]+)\/test$/.exec(p))) {
-      const src = store.sources.find((s) => s.id === decodeURIComponent(r![1]!));
+      let src = store.sources.find((s) => s.id === decodeURIComponent(r![1]!));
       if (!src) throw new HttpError(404, "No such source");
-      return json(res, 200, await broker.testSource(src));
+      // Testing 1Password also finds the `op` command and remembers where it is, so it keeps working however the app was started.
+      const located = src.type === "1password" ? await this.locateOnePassword(src) : null;
+      if (located) src = located.source;
+      const result = await broker.testSource(src);
+      return json(res, 200, located?.saved && result.ok ? { ...result, message: `${result.message}. Found op at ${located.saved} and saved it.` } : result);
     }
     if (m === "PUT" && (r = /^\/api\/sources\/([^/]+)\/token$/.exec(p))) {
       const id = decodeURIComponent(r[1]!);
@@ -860,10 +891,11 @@ export class Hub {
       await manager.refreshFromStore(affected.map((a) => a.id));
       return json(res, 200, { ok: true, affected, localSecretsRemoved: removed, encryption: this.box.info() });
     }
-    // Looks for the tools 1Password and the keychain need. Nothing is read, so no approval prompt appears.
-    // A 1Password CLI found outside the PATH the hub sees is remembered on the source.
+    // Looks for the tools the enabled sources need (1Password, the keychain, Vault). Nothing is read, so no approval
+    // prompt appears. A source that is switched off is left alone, so it never nags. A 1Password CLI found outside
+    // the PATH the hub sees is remembered on the source.
     if (m === "GET" && p === "/api/credentials/setup") {
-      const statuses = await detectSetup(store.sources.filter((s) => s.enabled || s.type === "1password" || s.type === "keychain"), this.baseEnvCache(), {
+      const statuses = await detectSetup(store.sources.filter((s) => s.enabled), this.baseEnvCache(), {
         hasSecret: (n) => broker.memory.get(n) !== undefined,
       });
       for (const st of statuses) {

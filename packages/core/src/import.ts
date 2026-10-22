@@ -37,20 +37,43 @@ export function codexHome(): string {
 
 /**
  * The Microsoft Store (MSIX) build of Claude Desktop keeps its config inside the package's own copy of AppData
- * (`%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude`), not in `%APPDATA%`. Returns that file if it exists.
+ * (`%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming\Claude`), and reads only that one, not `%APPDATA%`, even before
+ * it has made a config file. So when the Store package is installed its path is the answer; otherwise the classic one.
+ * `exists`/`list` are parameters so this can be tested without Windows.
  */
-function msixClaudeConfig(): string | undefined {
-  const packages = join(process.env.LOCALAPPDATA ?? join(homedir(), "AppData", "Local"), "Packages");
+export function claudeDesktopWindowsPath(appData: string, localAppData: string, list: (dir: string) => string[] = (d) => readdirSync(d)): string {
+  const classic = join(appData, "Claude", "claude_desktop_config.json");
+  const packages = join(localAppData, "Packages");
   try {
-    for (const dir of readdirSync(packages)) {
-      if (!/^Claude_/i.test(dir)) continue;
-      const file = join(packages, dir, "LocalCache", "Roaming", "Claude", "claude_desktop_config.json");
-      if (existsSync(file)) return file;
-    }
+    const pkg = list(packages).find((dir) => /^Claude_/i.test(dir));
+    if (pkg) return join(packages, pkg, "LocalCache", "Roaming", "Claude", "claude_desktop_config.json");
   } catch {
     // no Packages folder: not Windows, or nothing installed from the Store
   }
-  return undefined;
+  return classic;
+}
+
+/** Claude Code keeps its user settings, and the MCP servers added for the user, in `~/.claude.json` (`$CLAUDE_CONFIG_DIR/.claude.json` when that is set). */
+export function claudeCodeConfigPath(home: string, env: NodeJS.ProcessEnv = process.env): string {
+  const dir = env.CLAUDE_CONFIG_DIR?.trim();
+  return dir ? join(dir, ".claude.json") : join(home, ".claude.json");
+}
+
+/**
+ * The Copilot CLI's MCP config: in `$COPILOT_HOME` when that is set, otherwise `~/.copilot`. Where `XDG_CONFIG_HOME` is
+ * set and the config is only found under `$XDG_CONFIG_HOME/copilot`, that one is used; everywhere else the default stands.
+ */
+export function copilotConfigPath(home: string, env: NodeJS.ProcessEnv = process.env, exists: (p: string) => boolean = existsSync): string {
+  const name = "mcp-config.json";
+  const override = env.COPILOT_HOME?.trim();
+  if (override) return join(override, name);
+  const usual = join(home, ".copilot", name);
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg && !exists(usual)) {
+    const alt = join(xdg, "copilot", name);
+    if (exists(alt)) return alt;
+  }
+  return usual;
 }
 
 export function candidatePaths(): ClientConfigFile[] {
@@ -67,14 +90,14 @@ export function candidatePaths(): ClientConfigFile[] {
     process.platform === "darwin"
       ? join(home, "Library", "Application Support", "Claude", "claude_desktop_config.json")
       : process.platform === "win32"
-        ? (msixClaudeConfig() ?? join(appData, "Claude", "claude_desktop_config.json"))
+        ? claudeDesktopWindowsPath(appData, process.env.LOCALAPPDATA ?? join(home, "AppData", "Local"))
         : join(configHome, "Claude", "claude_desktop_config.json");
   return [
     { client: "Claude Desktop", path: desktop, shape: "mcpServers", key: "mcpServers" },
-    { client: "Claude Code", path: join(home, ".claude.json"), shape: "claude-code", key: "mcpServers" },
+    { client: "Claude Code", path: claudeCodeConfigPath(home), shape: "claude-code", key: "mcpServers" },
     // The ChatGPT desktop app, the Codex CLI and the Codex IDE extension all read this one file.
     { client: "ChatGPT / Codex", path: join(codexHome(), "config.toml"), shape: "mcpServers", key: "mcp_servers", format: "toml" },
-    { client: "GitHub Copilot CLI", path: join(home, ".copilot", "mcp-config.json"), shape: "mcpServers", key: "mcpServers" },
+    { client: "GitHub Copilot CLI", path: copilotConfigPath(home), shape: "mcpServers", key: "mcpServers" },
     { client: "VS Code", path: vscode, shape: "mcpServers", key: "servers" },
     { client: "Cursor", path: join(home, ".cursor", "mcp.json"), shape: "mcpServers", key: "mcpServers" },
     // Auggie, Augment's CLI. Its settings file holds other settings too; only "mcpServers" is touched.

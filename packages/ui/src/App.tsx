@@ -60,6 +60,8 @@ export function App() {
   }
 
   const connectedCount = snap?.servers.filter((s) => s.state === "connected").length ?? 0;
+  // The same test as the "In use" badge on a server card: connected, and an app is using it right now.
+  const inUseCount = snap?.servers.filter((s) => s.state === "connected" && s.inUse).length ?? 0;
   const problemServer = snap?.servers.find((s) => s.state === "error" || s.state === "needs-auth");
   const problem = !!problemServer;
   const problemCount = snap?.servers.filter((s) => s.state === "error" || s.state === "needs-auth").length ?? 0;
@@ -99,6 +101,7 @@ export function App() {
               ) : (
                 <div className="min-w-0">
                   <div>{connectedCount} connected</div>
+                  <div className={inUseCount > 0 ? "font-medium text-accent" : undefined}>{inUseCount} in use</div>
                   {problem && (
                     <button onClick={showProblem} title={`Open ${problemServer?.config.name}`} className="cursor-pointer text-left font-medium text-warn underline-offset-2 hover:underline">
                       {problemCount} need{problemCount === 1 ? "s" : ""} attention
