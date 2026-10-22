@@ -19,6 +19,14 @@
 - **Transparency: the user can always see when an app connects to a server and when a secret is requested.** Every secret read (including cache hits, preloads, retries and restarts) and every app connection is attributed to a server and a reason, recorded in History and announced by a notification (unless the user turned those off). Never read a secret or start a server on a path that skips this: pass a real trigger phrase to `connect(trigger)` / `broker.resolve(…, trigger)`. History must never store secret values, references, commands, arguments or raw error text. Details: `ARCHITECTURE.md` §4.5.
 - **Every setting has a sane default** in `DEFAULT_SETTINGS`, and an invalid saved value falls back to it (`normalizeSettings`). A new setting needs a default, an entry in `SETTING_LIMITS` if numeric, and validation in `PUT /api/settings`.
 
+## Cross-platform rules
+
+macOS is the reference platform and must not regress while other platforms are added (`WINDOWS-TODO.md`).
+
+- **Add platform behaviour beside the working code, don't rewrite it.** A new platform gets its own branch or module; the macOS path keeps calling the existing code unchanged. Don't refactor working macOS code in the same change as a new platform's additions.
+- **Test platform branches with injected inputs.** Take the platform and lookups (process table, signer, keystore) as parameters and feed fake data, so every platform's logic runs on macOS CI. Never loosen or skip a macOS test to make another platform pass; every new `skipIf(process.platform …)` needs a reason in a comment.
+- **CI must stay green on macOS** (`.github/workflows/ci.yml`, "Test (macOS)" is a required check). Before merging a platform milestone, run the macOS smoke list on a Mac: `npm test`; start the daemon; connect an app through the shim over `hub.sock`; approve it once; call a server; stop it and confirm no orphans; Save As dialog; Automation page; a `keychain://` read.
+
 ## UI rules
 
 - **Every path the UI shows is a link that opens it in the file manager.** Use `PathLink` (`packages/ui/src/ui.tsx`), never bare text: for an app's config file (`app`), a backup of it (`app` + `backup`), a connected app's program (`running`) or the file just exported (`exported`). The hub looks the file up itself, so don't send an arbitrary path to it; if a new kind of path needs a link, add a server-side lookup for it (see `/api/apps/reveal`, `/api/clients/:id/reveal`) that only accepts known locations. Don't put paths inside sentences as plain text either; show the link next to the text.

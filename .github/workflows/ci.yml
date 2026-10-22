@@ -1,0 +1,45 @@
+# Typecheck and test on every pull request and every push to master, on macOS and Windows.
+#
+# macOS is the platform MCP Hub is developed on and it must stay green: make "Test (macOS)" a required check in
+# the branch protection rules. Windows support is being added (see WINDOWS-TODO.md), so "Test (Windows)" is allowed
+# to fail until that work lands; then remove `continue-on-error` and make it required too.
+#
+# release.yml also runs the tests before a release, but it skips pushes that only touch docs or tests, so this
+# workflow is what covers those.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS, os: macos-latest, experimental: false }
+          - { name: Windows, os: windows-latest, experimental: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Versions agree with each other
+        run: node scripts/version.mjs check
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
