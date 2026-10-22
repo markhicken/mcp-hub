@@ -1,7 +1,7 @@
 {
   "name": "mcp-hub",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A persistent local hub that proxies every MCP server and manages their credentials in memory.",
   "workspaces": [
     "packages/*",
