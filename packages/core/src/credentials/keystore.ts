@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { atomicWriteFileSync } from "../atomic-write.js";
 import { explainPowerShellFailure, powerShellArgs } from "../powershell.js";
+import { trace } from "../trace.js";
 import { SecretBox } from "./box.js";
 import { DPAPI_PROTECT_SCRIPT, DPAPI_UNPROTECT_SCRIPT, NOT_FOUND, READ_SECRET_SCRIPT, WRITE_SECRET_SCRIPT } from "./wincred.js";
 
@@ -90,6 +91,7 @@ const WIN_TARGET = "MCP Hub master key";
 
 /** Runs a PowerShell script synchronously; the key travels on stdin. Failures become KeyStoreErrors with the reason. */
 function powerShellSync(script: string, input?: string, env?: Record<string, string>): string {
+  trace("key store: running PowerShell");
   try {
     return execFileSync("powershell.exe", powerShellArgs(script), {
       encoding: "utf8",
@@ -196,6 +198,11 @@ export function windowsKeyStore(dir?: string, stores: { credman?: KeyStore; dpap
 
 /** The key store for this operating system. `dir` is MCP Hub's data directory (Windows keeps its DPAPI fallback file there). */
 export function osKeyStore(dir?: string): KeyStore {
+  // A testing aid for builds and CI: keep the key in this process, so a start-up check never reads or writes the machine's real key store.
+  if (process.env.MCP_HUB_KEYSTORE === "memory") {
+    let saved: Buffer | null = null;
+    return { name: "Memory only (testing)", read: () => saved, write: (k) => void (saved = k) };
+  }
   if (process.platform === "darwin") return macKeychain();
   if (process.platform === "linux") return linuxSecretService();
   if (process.platform === "win32") return windowsKeyStore(dir);

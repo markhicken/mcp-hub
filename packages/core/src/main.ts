@@ -6,6 +6,7 @@ import { ChildRegistry } from "./children.js";
 import { Hub } from "./hub.js";
 import { childrenPath, configPath, dataDir, historyDbPath, runtimePath, socketPath, usageDbPath } from "./paths.js";
 import { loadShellEnv, mergeEnv } from "./system.js";
+import { trace } from "./trace.js";
 import { VERSION } from "./version.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -53,6 +54,7 @@ export async function main(): Promise<void> {
   } catch {}
 
   const running = await existingInstance(dir);
+  trace("checked for a running hub");
   if (running) {
     process.stderr.write(`MCP Hub is already running on port ${running.port}\n`);
     process.stdout.write(JSON.stringify({ event: "already-running", port: running.port }) + "\n");
@@ -62,12 +64,15 @@ export async function main(): Promise<void> {
   // Stop servers a previous hub left behind if it was killed before it could stop them.
   const swept = await new ChildRegistry(childrenPath(dir)).sweep();
   if (swept) process.stderr.write(`Stopped ${swept} leftover MCP server process${swept === 1 ? "" : "es"} from a previous run\n`);
+  trace("swept leftover servers");
 
   const shellEnv = await loadShellEnv();
+  trace("loaded the environment");
   const baseEnv = mergeEnv(process.env, shellEnv);
   for (const k of Object.keys(baseEnv)) if (k.startsWith("MCP_HUB_")) delete baseEnv[k];
 
   const uiToken = process.env.MCP_HUB_TOKEN || randomBytes(24).toString("base64url");
+  trace("opening the hub (key store, config, databases)");
   const hub = new Hub({
     dataDir: dir,
     configPath: configPath(dir),
@@ -82,7 +87,9 @@ export async function main(): Promise<void> {
   });
 
   const preferred = Number(process.env.MCP_HUB_PORT) || hub.store.settings.port;
+  trace("hub opened, starting to listen");
   const port = await hub.listen(preferred);
+  trace("listening");
 
   const writeRuntime = () =>
     writeFileSync(

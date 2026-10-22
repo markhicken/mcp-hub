@@ -85,11 +85,15 @@ async function bundle(entry, outfile) {
 }
 
 /** Run the finished executable once, the way the app will, so a broken bundle fails the build instead of the user. */
+// Slow CI machines (Windows on ARM) need longer than a desktop, and a start that is only slow should not fail the build.
+const STARTUP_LIMIT_MS = 90_000;
+
 function smokeTest(name, exe) {
   return new Promise((done, reject) => {
     const home = mkdtempSync(join(tmpdir(), "mcp-hub-smoke-"));
     const child = spawn(exe, name === "mcp-hub-core" ? ["--exit-on-stdin-close"] : [], {
-      env: { ...process.env, MCP_HUB_HOME: home, MCP_HUB_PORT: "0", MCP_HUB_TOKEN: "smoke" },
+      // The key store is kept in memory so this check never reads or writes the machine's real keychain / Credential Manager.
+      env: { ...process.env, MCP_HUB_HOME: home, MCP_HUB_PORT: "0", MCP_HUB_TOKEN: "smoke", MCP_HUB_KEYSTORE: "memory", MCP_HUB_TRACE: "1" },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let out = "";
@@ -114,7 +118,7 @@ function smokeTest(name, exe) {
       if (child.exitCode !== null || child.signalCode !== null) cleanup();
       else child.once("exit", cleanup);
     };
-    const timer = setTimeout(() => finish(new Error(`${name} did not start within 30s.\n${err}`)), 30_000);
+    const timer = setTimeout(() => finish(new Error(`${name} did not start within ${STARTUP_LIMIT_MS / 1000}s.\n--- stderr (last steps shown by MCP_HUB_TRACE)\n${err}\n--- stdout\n${out}`)), STARTUP_LIMIT_MS);
     child.stdout.on("data", (d) => {
       out += d;
       if (name === "mcp-hub-core" && out.includes('"event":"ready"')) finish();

@@ -5,7 +5,7 @@ import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { SecretBox, SecretBoxError, SEAL_PREFIX } from "../src/credentials/box.js";
 import { CredentialBroker } from "../src/credentials/broker.js";
-import { loadSecretBox, memoryKeyStore, type KeyStore } from "../src/credentials/keystore.js";
+import { loadSecretBox, memoryKeyStore, osKeyStore, type KeyStore } from "../src/credentials/keystore.js";
 import { LocalSecrets } from "../src/credentials/local-secrets.js";
 import { Hub } from "../src/hub.js";
 import { LogBuffer } from "../src/logs.js";
@@ -63,6 +63,21 @@ describe("master key", () => {
     const broken = loadSecretBox({ name: "KS", read: () => { throw new Error("locked"); }, write: () => {} }, { allowCreate: true });
     expect(broken.persistent).toBe(false);
     expect(broken.problem).toMatch(/KS can't be used \(locked\)/);
+  });
+  it("can be kept in memory only (MCP_HUB_KEYSTORE=memory), so a start-up check never touches the real key store", () => {
+    const saved = process.env.MCP_HUB_KEYSTORE;
+    process.env.MCP_HUB_KEYSTORE = "memory";
+    try {
+      const store = osKeyStore();
+      expect(store.read()).toBeNull();
+      const box = loadSecretBox(store, { allowCreate: true });
+      expect(box.persistent).toBe(true);
+      expect(store.read()).toHaveLength(32);
+      expect(osKeyStore().read()).toBeNull(); // each start has its own; nothing was saved anywhere
+    } finally {
+      if (saved === undefined) delete process.env.MCP_HUB_KEYSTORE;
+      else process.env.MCP_HUB_KEYSTORE = saved;
+    }
   });
 });
 
