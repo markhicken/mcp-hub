@@ -39,10 +39,8 @@ type Step = "choose" | "paste" | "form";
 type Pair = { k: string; v: string };
 
 const toPairs = (r?: Record<string, string>): Pair[] => Object.entries(r ?? {}).map(([k, v]) => ({ k, v }));
-const fromPairs = (p: Pair[]): Record<string, string> | undefined => {
-  const e = p.filter((x) => x.k.trim());
-  return e.length ? Object.fromEntries(e.map((x) => [x.k.trim(), x.v])) : undefined;
-};
+// An empty list is sent as {} rather than left out: a missing field means "unchanged" to the hub, so the last row could never be removed.
+const fromPairs = (p: Pair[]): Record<string, string> => Object.fromEntries(p.filter((x) => x.k.trim()).map((x) => [x.k.trim(), x.v]));
 
 export function AddServerDialog({ existing, knownLabels = [], onClose }: Props) {
   const toast = useToast();

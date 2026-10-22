@@ -28,6 +28,16 @@ describe("server notes", () => {
     expect((await t.api("GET", "/api/servers/noted")).body.config).not.toHaveProperty("notes");
   });
 
+  it("headers and variables can all be removed with an empty object", async () => {
+    await t.api("POST", "/api/servers", { name: "Remote", transport: "http", url: "https://example.com/mcp", enabled: false, headers: { A: "1" } });
+    await t.api("PUT", "/api/servers/remote", { headers: {} });
+    expect((await t.api("GET", "/api/servers/remote")).body.config).not.toHaveProperty("headers");
+
+    await t.api("POST", "/api/servers", { name: "Local", transport: "stdio", command: "npx", enabled: false, env: { A: "1" } });
+    await t.api("PUT", "/api/servers/local", { env: {} });
+    expect((await t.api("GET", "/api/servers/local")).body.config).not.toHaveProperty("env");
+  });
+
   it("are left out when blank at creation and limited in length", async () => {
     const blank = await t.api("POST", "/api/servers", { name: "Blank", transport: "stdio", command: "npx", enabled: false, notes: "" });
     expect(blank.status).toBe(201);

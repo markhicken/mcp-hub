@@ -173,6 +173,7 @@ export class HubManager extends EventEmitter {
     if (err) throw new HttpError(400, err);
     if (this.conns.has(cfg.id)) throw new HttpError(409, `A server with id "${cfg.id}" already exists`);
     if (typeof cfg.notes === "string" && !cfg.notes.trim()) delete cfg.notes;
+    for (const k of ["headers", "env"] as const) if (cfg[k] && !Object.keys(cfg[k]!).length) delete cfg[k];
     this.opts.store.upsertServer(cfg);
     const conn = this.createConnection(this.opts.store.getServer(cfg.id)!);
     this.opts.history?.record({ kind: "config", action: "added", serverId: cfg.id, serverName: cfg.name });
@@ -187,6 +188,8 @@ export class HubManager extends EventEmitter {
     const next: ServerConfig = { ...this.opts.store.reveal(conn.config), ...patch, id };
     // An emptied notes box means no notes, not an empty string kept in the config.
     if (typeof next.notes === "string" && !next.notes.trim()) delete next.notes;
+    // Likewise, removing every header or variable leaves none, not an empty object.
+    for (const k of ["headers", "env"] as const) if (next[k] && !Object.keys(next[k]!).length) delete next[k];
     this.setLabels(next);
     const err = validateServer(next);
     if (err) throw new HttpError(400, err);
