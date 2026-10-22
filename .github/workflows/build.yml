@@ -1,0 +1,171 @@
+# Builds the MCP Hub installers on every platform and keeps them as workflow artifacts for two weeks.
+#
+# Two ways in:
+#   - release.yml calls it when the version in the repo has no GitHub Release yet, and then publishes what it built.
+#   - By hand: Actions -> Build -> Run workflow, on any branch, to check that everything still builds and installs
+#     (for example before bumping the version). It publishes nothing; download the installers from the run's artifacts.
+#
+# The hub and the bridge are Node programs packaged with the Node that builds them (scripts/build-sidecars.mjs),
+# so each platform is built on its own runner: macOS (Apple silicon and Intel) and Windows (x64 and ARM64). To add
+# Linux, add a runner to the matrix below (it builds with `npm run build:app` too, but hasn't been tried).
+#
+# Signing is optional. Without the secrets below the builds are unsigned (macOS: right-click -> Open the first time;
+# Windows: SmartScreen's "Run anyway"). With them macOS is signed with a Developer ID certificate and notarized:
+#   APPLE_CERTIFICATE            base64 of the Developer ID Application .p12   (base64 -i cert.p12 | pbcopy)
+#   APPLE_CERTIFICATE_PASSWORD   the .p12 password
+#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID   notarization (an app-specific password, not your Apple ID password)
+# and Windows is signed with an Authenticode certificate:
+#   WINDOWS_CERTIFICATE          base64 of the code-signing .pfx
+#   WINDOWS_CERTIFICATE_PASSWORD the .pfx password
+# (release.yml passes the repository's secrets on with `secrets: inherit`; a manual run has them too.)
+name: Build
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Which installers to build
+        type: string
+        default: all
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Which installers to build
+        type: choice
+        options: [all, macos, windows]
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.platform == 'macos' && '{"include":[{"name":"macOS (Apple silicon)","slug":"macos-arm64","os":"macos-latest"},{"name":"macOS (Intel)","slug":"macos-x64","os":"macos-15-intel"}]}' || inputs.platform == 'windows' && '{"include":[{"name":"Windows (x64)","slug":"windows-x64","os":"windows-latest"},{"name":"Windows (ARM64)","slug":"windows-arm64","os":"windows-11-arm"}]}' || '{"include":[{"name":"macOS (Apple silicon)","slug":"macos-arm64","os":"macos-latest"},{"name":"macOS (Intel)","slug":"macos-x64","os":"macos-15-intel"},{"name":"Windows (x64)","slug":"windows-x64","os":"windows-latest"},{"name":"Windows (ARM64)","slug":"windows-arm64","os":"windows-11-arm"}]}') }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
+      - name: Linux packages for Tauri
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      # The signing variables are only set for the steps that need them: Tauri treats an empty APPLE_CERTIFICATE as
+      # a certificate to import and fails, so without the secrets they must not exist at all.
+      - name: Check for signing secrets
+        id: signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$WINDOWS_CERTIFICATE" ]; then echo "windows=true" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Import the signing certificate
+        if: runner.os == 'macOS' && steps.signing.outputs.enabled == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          NOTARIZE_APPLE_ID: ${{ secrets.APPLE_ID }}
+          NOTARIZE_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          NOTARIZE_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/build.keychain"
+          password="$(uuidgen)"
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain
+          identity="$(security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)".*/\1/')"
+          if [ -z "$identity" ]; then echo "No Developer ID Application identity found in the certificate" >&2; exit 1; fi
+          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
+          # Notarization needs all three; the certificate itself is already in the keychain, so it isn't passed on.
+          if [ -n "$NOTARIZE_APPLE_ID" ] && [ -n "$NOTARIZE_APPLE_PASSWORD" ] && [ -n "$NOTARIZE_APPLE_TEAM_ID" ]; then
+            {
+              echo "APPLE_ID=$NOTARIZE_APPLE_ID"
+              echo "APPLE_PASSWORD=$NOTARIZE_APPLE_PASSWORD"
+              echo "APPLE_TEAM_ID=$NOTARIZE_APPLE_TEAM_ID"
+            } >> "$GITHUB_ENV"
+          fi
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      # Optional Authenticode signing. Without the secrets the Windows installer is unsigned and SmartScreen warns
+      # ("Windows protected your PC": More info -> Run anyway). With them the certificate is imported for this job and
+      # Tauri signs the app and installer with it (TAURI_CONFIG is merged over tauri.conf.json).
+      - name: Import the Windows signing certificate
+        if: runner.os == 'Windows' && steps.signing.outputs.windows == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'certificate.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          $config = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = 'sha256'; timestampUrl = 'http://timestamp.digicert.com' } } } | ConvertTo-Json -Compress -Depth 5
+          "TAURI_CONFIG=$config" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - run: npm ci
+
+      # Spotlight indexing a freshly mounted installer image is what usually makes `hdiutil` fail to eject it
+      # ("Resource busy") while the .dmg is being made, so turn it off for this job.
+      - name: Keep Spotlight off the installer images
+        if: runner.os == 'macOS'
+        run: sudo mdutil -a -i off || true
+
+      # Builds the UI, the two sidecars (with a start-up check of each), and the app, then gathers them into dist/.
+      # Making the .dmg still fails on the odd run ("couldn't eject disk"), so a failed build detaches any
+      # leftover image and is tried again, up to three times. Anything else that fails fails all three.
+      - name: Build the app
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npm run build:app; then exit 0; fi
+            echo "::warning::Build attempt $attempt failed"
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              # Only images made while bundling (the DMG staging images live under bundle/dmg).
+              for disk in $(hdiutil info | awk '/^=+$/ {p=""} /^image-path/ {p=$0} /^\/dev\/disk[0-9]+[ \t]/ && p ~ /bundle\/dmg/ {print $1}'); do
+                hdiutil detach -force "$disk" 2>/dev/null || true
+              done
+            fi
+            sleep 10
+          done
+          exit 1
+
+      - name: Name the installers
+        shell: bash
+        run: |
+          mkdir -p installers
+          for f in dist/*.dmg dist/*.msi dist/*.exe dist/*.deb dist/*.AppImage; do
+            if [ -e "$f" ]; then cp "$f" installers/; fi
+          done
+          ls -la installers
+          [ -n "$(ls installers)" ] || { echo "The build produced no installers" >&2; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcp-hub-${{ matrix.slug }}
+          path: installers/*
+          if-no-files-found: error
+          retention-days: 14

@@ -1,28 +1,18 @@
-# Builds MCP Hub on every push or merge to master, and publishes it to GitHub Releases.
+# Tests every push or merge to master, and releases when the version has changed.
 #
-#   Every push to master:  typecheck and test on macOS and Windows (the same steps CI runs on pull requests), then
-#                          build the installers (macOS: Apple silicon and Intel; Windows: x64 and ARM64), keep them as
-#                          workflow artifacts for two weeks.
-#   New version:           if the version in the repo has no GitHub Release yet, the installers are also published
-#                          as release v<version> (the tag is created for you). So a release is just: bump the
-#                          version (node scripts/version.mjs set 1.2.3), commit, merge to master.
-#                          Pushes that don't change the version build and test only, and publish nothing.
+#   Every push to master:  typecheck and test on macOS and Windows (the same steps CI runs on pull requests).
+#   New version:           if the version in the repo has no GitHub Release yet, the installers are built (build.yml:
+#                          macOS Apple silicon and Intel, Windows x64 and ARM64) and published as release v<version>
+#                          (the tag is created for you). So a release is just: bump the version
+#                          (node scripts/version.mjs set 1.2.3), commit, merge to master.
+#                          Pushes that don't change the version build and publish nothing. To check that everything
+#                          still builds without releasing, run the Build workflow by hand (Actions -> Build).
 #   Skipped entirely:      pushes that only touch docs (*.md), screenshots, tests or dev-only scripts (see
 #                          paths-ignore below). Note a push mixing those with app changes still runs. Such changes
 #                          are tested by CI on their pull request, so keep merging through pull requests.
 #
-# The hub and the bridge are Node programs packaged with the Node that builds them (scripts/build-sidecars.mjs),
-# so each platform is built on its own runner: macOS (Apple silicon and Intel) and Windows (x64 and ARM64). To add
-# Linux, add a runner to the matrix below (it builds with `npm run build:app` too, but hasn't been tried).
-#
-# Signing is optional. Without the secrets below the builds are unsigned (macOS: right-click -> Open the first time;
-# Windows: SmartScreen's "Run anyway"). With them macOS is signed with a Developer ID certificate and notarized:
-#   APPLE_CERTIFICATE            base64 of the Developer ID Application .p12   (base64 -i cert.p12 | pbcopy)
-#   APPLE_CERTIFICATE_PASSWORD   the .p12 password
-#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID   notarization (an app-specific password, not your Apple ID password)
-# and Windows is signed with an Authenticode certificate:
-#   WINDOWS_CERTIFICATE          base64 of the code-signing .pfx
-#   WINDOWS_CERTIFICATE_PASSWORD the .pfx password
+# Signing is optional and is configured in build.yml (APPLE_* and WINDOWS_CERTIFICATE* secrets); the repository's
+# secrets are passed on to it.
 name: Release
 
 on:
@@ -51,8 +41,31 @@ permissions:
   contents: read
 
 jobs:
+  # Is there anything to release? Only a version that has no GitHub Release yet is built and published.
+  version:
+    name: Is this version already released?
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "v$version already has a release, so nothing is built or published. Bump the version to release again."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
   # Fails fast, before anything slow starts: every file that carries the version must agree, and the code must pass on
   # macOS and Windows. The steps are the same ones CI runs on pull requests (the shared action), so they can't drift apart.
+  # Runs on every push, so two changes that pass separately but break each other are caught after they are merged.
   test:
     name: Typecheck and test (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
@@ -67,174 +80,29 @@ jobs:
       - uses: ./.github/actions/typecheck-and-test
 
   build:
-    name: Build ${{ matrix.name }}
-    needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { name: macOS (Apple silicon), slug: macos-arm64, os: macos-latest }
-          - { name: macOS (Intel), slug: macos-x64, os: macos-15-intel }
-          - { name: Windows (x64), slug: windows-x64, os: windows-latest }
-          - { name: Windows (ARM64), slug: windows-arm64, os: windows-11-arm }
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: apps/desktop/src-tauri
-
-      - name: Linux packages for Tauri
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
-
-      # The signing variables are only set for the steps that need them: Tauri treats an empty APPLE_CERTIFICATE as
-      # a certificate to import and fails, so without the secrets they must not exist at all.
-      - name: Check for signing secrets
-        id: signing
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-        run: |
-          if [ -n "$APPLE_CERTIFICATE" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"; fi
-          if [ -n "$WINDOWS_CERTIFICATE" ]; then echo "windows=true" >> "$GITHUB_OUTPUT"; fi
-
-      - name: Import the signing certificate
-        if: runner.os == 'macOS' && steps.signing.outputs.enabled == 'true'
-        shell: bash
-        env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          NOTARIZE_APPLE_ID: ${{ secrets.APPLE_ID }}
-          NOTARIZE_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          NOTARIZE_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          keychain="$RUNNER_TEMP/build.keychain"
-          password="$(uuidgen)"
-          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
-          security create-keychain -p "$password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$password" "$keychain"
-          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain"
-          security list-keychains -d user -s "$keychain" login.keychain
-          identity="$(security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)".*/\1/')"
-          if [ -z "$identity" ]; then echo "No Developer ID Application identity found in the certificate" >&2; exit 1; fi
-          echo "APPLE_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
-          # Notarization needs all three; the certificate itself is already in the keychain, so it isn't passed on.
-          if [ -n "$NOTARIZE_APPLE_ID" ] && [ -n "$NOTARIZE_APPLE_PASSWORD" ] && [ -n "$NOTARIZE_APPLE_TEAM_ID" ]; then
-            {
-              echo "APPLE_ID=$NOTARIZE_APPLE_ID"
-              echo "APPLE_PASSWORD=$NOTARIZE_APPLE_PASSWORD"
-              echo "APPLE_TEAM_ID=$NOTARIZE_APPLE_TEAM_ID"
-            } >> "$GITHUB_ENV"
-          fi
-          rm -f "$RUNNER_TEMP/certificate.p12"
-
-      # Optional Authenticode signing. Without the secrets the Windows installer is unsigned and SmartScreen warns
-      # ("Windows protected your PC": More info -> Run anyway). With them the certificate is imported for this job and
-      # Tauri signs the app and installer with it (TAURI_CONFIG is merged over tauri.conf.json).
-      - name: Import the Windows signing certificate
-        if: runner.os == 'Windows' && steps.signing.outputs.windows == 'true'
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          $pfx = Join-Path $env:RUNNER_TEMP 'certificate.pfx'
-          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
-          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
-          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
-          Remove-Item $pfx
-          $config = @{ bundle = @{ windows = @{ certificateThumbprint = $cert.Thumbprint; digestAlgorithm = 'sha256'; timestampUrl = 'http://timestamp.digicert.com' } } } | ConvertTo-Json -Compress -Depth 5
-          "TAURI_CONFIG=$config" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - run: npm ci
-
-      # Spotlight indexing a freshly mounted installer image is what usually makes `hdiutil` fail to eject it
-      # ("Resource busy") while the .dmg is being made, so turn it off for this job.
-      - name: Keep Spotlight off the installer images
-        if: runner.os == 'macOS'
-        run: sudo mdutil -a -i off || true
-
-      # Builds the UI, the two sidecars (with a start-up check of each), and the app, then gathers them into dist/.
-      # Making the .dmg still fails on the odd run ("couldn't eject disk"), so a failed build detaches any
-      # leftover image and is tried again, up to three times. Anything else that fails fails all three.
-      - name: Build the app
-        shell: bash
-        run: |
-          for attempt in 1 2 3; do
-            if npm run build:app; then exit 0; fi
-            echo "::warning::Build attempt $attempt failed"
-            if [ "$RUNNER_OS" = "macOS" ]; then
-              # Only images made while bundling (the DMG staging images live under bundle/dmg).
-              for disk in $(hdiutil info | awk '/^=+$/ {p=""} /^image-path/ {p=$0} /^\/dev\/disk[0-9]+[ \t]/ && p ~ /bundle\/dmg/ {print $1}'); do
-                hdiutil detach -force "$disk" 2>/dev/null || true
-              done
-            fi
-            sleep 10
-          done
-          exit 1
-
-      - name: Name the installers
-        shell: bash
-        run: |
-          mkdir -p installers
-          for f in dist/*.dmg dist/*.msi dist/*.exe dist/*.deb dist/*.AppImage; do
-            if [ -e "$f" ]; then cp "$f" installers/; fi
-          done
-          ls -la installers
-          [ -n "$(ls installers)" ] || { echo "The build produced no installers" >&2; exit 1; }
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: mcp-hub-${{ matrix.slug }}
-          path: installers/*
-          if-no-files-found: error
-          retention-days: 14
+    name: Build
+    needs: [version, test]
+    if: needs.version.outputs.publish == 'true'
+    uses: ./.github/workflows/build.yml
+    secrets: inherit
 
   release:
     name: Publish the release
-    needs: build
+    needs: [version, build]
+    if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Is this version already released?
-        id: version
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          version=$(node -p "require('./package.json').version")
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          if gh release view "v$version" > /dev/null 2>&1; then
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-            echo "v$version already has a release, nothing to publish. Bump the version to release again."
-          else
-            echo "publish=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - if: steps.version.outputs.publish == 'true'
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           pattern: mcp-hub-*
           merge-multiple: true
           path: release
 
       - name: Checksums and notes
-        if: steps.version.outputs.publish == 'true'
         run: |
           cd release
           sha256sum * > SHA256SUMS.txt
@@ -248,13 +116,12 @@ jobs:
           - Check a download against `SHA256SUMS.txt` with `shasum -a 256 <file>` (macOS) or `Get-FileHash <file>` (Windows PowerShell).
           EOF
 
-      - if: steps.version.outputs.publish == 'true'
-        uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
+          tag_name: ${{ needs.version.outputs.tag }}
           target_commitish: ${{ github.sha }}
           files: release/*
           body_path: notes.md
           generate_release_notes: true
-          prerelease: ${{ contains(steps.version.outputs.tag, '-') }}
+          prerelease: ${{ contains(needs.version.outputs.tag, '-') }}
           fail_on_unmatched_files: true
