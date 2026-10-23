@@ -228,6 +228,8 @@ Run `npm test` (core 43, UI 10) and `npm run typecheck`.
 
 `test/helpers.ts` starts a throwaway `Hub` on a random port with an in-memory usage DB. Use `fixtures/mock-mcp.mjs` (tools `echo`, `env`, `slow`, `boom`) as a stand-in MCP server. The broker tests that use the fake `op` skip on Windows (a shebang script). Windows-specific logic (`test/windows.test.ts`, the Windows cases in `clients.test.ts`) takes the platform or a fake PowerShell as input, so it runs on every platform's CI.
 
+**Windows tests from a Mac:** `npm run test:windows -- --host user@192.168.1.50` (`scripts/test-windows.mjs`) runs the suite on a Windows PC over SSH, without committing or pushing: it copies the working tree (including uncommitted changes) to `%USERPROFILE%\mcp-hub-test` on the PC, runs the version check, `npm ci`, `npm run typecheck` and `npm test` there, in CI's order, streams the output and exits with the result. The host is saved in `.windows-test-host` (gitignored) after the first successful connection, so later runs need no arguments; `--host` replaces it. Pass test file names to run only those, skipping the version check and typecheck (`npm run test:windows -- clients windows`), or `--dry-run` to check the packaging without connecting. The PC needs the OpenSSH Server running and Node 24+ on the machine PATH; a password (if you don't use a key) is asked for once per run.
+
 **Not covered by automated tests yet:** the Tauri window and tray, real OAuth, Vault, Windows keychain and Linux libsecret, and the compiled sidecars end to end.
 
 ## 11. Development workflow

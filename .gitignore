@@ -6,3 +6,4 @@ target
 packages/ui/dist
 apps/desktop/src-tauri/binaries
 .playwright-mcp
+.windows-test-host

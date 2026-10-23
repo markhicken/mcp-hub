@@ -19,6 +19,7 @@
     "screenshots": "npm run build -w @mcp-hub/ui && node scripts/screenshots/capture.ts",
     "version-up": "node scripts/version.mjs bump",
     "test": "npm test --workspaces --if-present",
+    "test:windows": "node scripts/test-windows.mjs",
     "build:sidecars": "node scripts/build-sidecars.mjs",
     "build:app": "npm run build -w @mcp-hub/ui && npm run build:sidecars && node scripts/with-signing.mjs npm run build -w @mcp-hub/desktop && node scripts/collect-dist.mjs",
     "build:app:debug": "node scripts/build-app-debug.mjs",
