@@ -92,6 +92,7 @@ export function describe(e: Pick<HistoryEvent, "kind" | "action" | "serverName" 
     case "app":
       switch (e.action) {
         case "asked": return `${e.app} asked to use MCP Hub`;
+        case "asked-server": return `${e.app} asked to use ${server}, which you haven't answered about yet`;
         case "allowed": return `You allowed ${e.app} to use ${e.detail || "every server"}`;
         case "changed": return `You changed what ${e.app} can use: ${e.detail}`;
         case "denied": return `You denied ${e.app}`;

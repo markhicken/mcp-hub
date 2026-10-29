@@ -11,6 +11,8 @@ export interface SavedApp {
   status: "allowed" | "denied";
   /** Servers it may use; null means every one, including servers added later. */
   allowed: string[] | null;
+  /** Servers the user was offered and left unticked. Any other server outside `allowed` is new, so the app asking for it is asked about. */
+  declined?: string[];
   /** The app's code-signing identity when it had one. A different signature at the same path is treated as a different app. */
   signer: string;
   savedAt: number;
@@ -27,6 +29,7 @@ const valid = (a: unknown): a is SavedApp => {
     typeof x.path === "string" &&
     (x.status === "allowed" || x.status === "denied") &&
     (x.allowed === null || (Array.isArray(x.allowed) && x.allowed.every((s) => typeof s === "string"))) &&
+    (x.declined === undefined || (Array.isArray(x.declined) && x.declined.every((s) => typeof s === "string"))) &&
     typeof x.signer === "string" &&
     typeof x.savedAt === "number" &&
     typeof x.lastSeen === "number"
@@ -56,7 +59,7 @@ export class AppStore {
 
   get(identity: string): SavedApp | undefined {
     const a = this.apps.get(identity);
-    return a && { ...a, allowed: a.allowed ? [...a.allowed] : null };
+    return a && { ...a, allowed: a.allowed ? [...a.allowed] : null, declined: [...(a.declined ?? [])] };
   }
 
   list(): SavedApp[] {
@@ -64,7 +67,7 @@ export class AppStore {
   }
 
   upsert(app: SavedApp): void {
-    this.apps.set(app.identity, { ...app, allowed: app.allowed ? [...app.allowed] : null });
+    this.apps.set(app.identity, { ...app, allowed: app.allowed ? [...app.allowed] : null, declined: [...(app.declined ?? [])] });
     this.save();
   }
 

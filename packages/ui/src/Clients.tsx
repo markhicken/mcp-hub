@@ -29,34 +29,43 @@ export function useDecide() {
 export function ClientApproval({ client, servers, onLater, onClose }: { client: ClientInfo; servers: ServerStatus[]; onLater?: () => void; onClose?: () => void }) {
   const decide = useDecide();
   const asking = client.status === "pending";
-  const [picked, setPicked] = useState<Set<string>>(() => new Set(client.allowed ?? servers.map((s) => s.id)));
+  // An allowed app asking for servers it wasn't offered (added after it was allowed).
+  const wanted = asking ? [] : client.asking.filter((id) => servers.some((s) => s.id === id));
+  const [picked, setPicked] = useState<Set<string>>(() => new Set([...(client.allowed ?? servers.map((s) => s.id)), ...wanted]));
   const [remember, setRemember] = useState(() => (asking ? true : client.remembered));
   const [busy, setBusy] = useState(false);
   const leave = onLater ?? onClose ?? (() => {});
 
-  const answer = async (allow: boolean) => {
+  const answer = async (allow: boolean, without: string[] = []) => {
     setBusy(true);
-    const ok = await decide(client, allow, allow && servers.length ? [...picked] : undefined, remember);
+    const ok = await decide(client, allow, allow && servers.length ? [...picked].filter((id) => !without.includes(id)) : undefined, remember);
     setBusy(false);
     if (ok) onClose?.();
   };
   const toggle = (id: string, on: boolean) => setPicked((p) => { const n = new Set(p); on ? n.add(id) : n.delete(id); return n; });
+  const wantedNames = wanted.map((id) => servers.find((s) => s.id === id)!.config.name);
   const asked = client.servers.filter((id) => servers.some((s) => s.id === id)).map((id) => servers.find((s) => s.id === id)!.config.name);
 
   return (
     <Dialog
-      title={asking ? `Allow ${client.name} to use MCP Hub?` : `What can ${client.name} use?`}
+      title={asking ? `Allow ${client.name} to use MCP Hub?` : wanted.length ? `Let ${client.name} use ${wantedNames.map((s) => `“${s}”`).join(", ")}?` : `What can ${client.name} use?`}
       subtitle={<PathLink running={client.id} path={client.path} />}
       onClose={leave}
       footer={
         <>
-          <Button variant="ghost" disabled={busy} onClick={leave}>{asking ? "Decide later" : "Cancel"}</Button>
+          <Button variant="ghost" disabled={busy} onClick={leave}>{asking || wanted.length ? "Decide later" : "Cancel"}</Button>
           {asking && <Button disabled={busy} onClick={() => answer(false)}>Deny</Button>}
-          <Button variant="primary" disabled={busy || (servers.length > 0 && !picked.size)} onClick={() => answer(true)}><ShieldCheck className="size-4" /> {asking ? "Allow" : "Save"}</Button>
+          {wanted.length > 0 && <Button disabled={busy} onClick={() => answer(true, wanted)}>Don't allow</Button>}
+          <Button variant="primary" disabled={busy || (servers.length > 0 && !picked.size)} onClick={() => answer(true)}><ShieldCheck className="size-4" /> {asking ? "Allow" : wanted.length ? "Allow selected" : "Save"}</Button>
         </>
       }
     >
       <div className="space-y-3 text-sm">
+        {wanted.length > 0 && (
+          <p>
+            <strong>{client.name}</strong> is asking to use {wantedNames.map((s) => `“${s}”`).join(", ")}, which you haven't answered about yet. It was allowed to use only some of your servers.
+          </p>
+        )}
         {asking && (
           <p>
             <strong>{client.name}</strong> is asking to connect to {asked.length ? asked.map((s) => `“${s}”`).join(", ") : "your servers"} through MCP Hub.
@@ -111,7 +120,7 @@ export function ClientList({ clients, servers }: { clients: ClientInfo[]; server
   const editingClient = clients.find((c) => c.id === editing);
   const removingClient = clients.find((c) => c.id === removing);
   if (!clients.length) return <p className="px-5 py-4 text-sm text-muted">No apps have connected yet.</p>;
-  const verdict = (c: ClientInfo) => (c.status === "allowed" ? (c.allowed ? `Allowed: ${c.allowed.filter((id) => servers.some((s) => s.id === id)).length} of ${servers.length} servers` : "Allowed: every server") : c.status === "pending" ? "Waiting for your answer" : "Denied");
+  const verdict = (c: ClientInfo) => (c.status === "allowed" ? (c.allowed ? `Allowed: ${c.allowed.filter((id) => servers.some((s) => s.id === id)).length} of ${servers.length} servers` : "Allowed: every server") : c.status === "pending" ? "Waiting for your answer" : "Denied") + (c.status === "allowed" && c.asking.some((id) => servers.some((s) => s.id === id)) ? " · asking for a new server" : "");
   const activity = (c: ClientInfo) => (c.running ? `${c.servers.length} requested · active ${timeAgo(c.lastSeen)}` : `not running · last seen ${timeAgo(c.lastSeen)}`);
   return (
     <>

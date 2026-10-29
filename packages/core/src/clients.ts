@@ -18,6 +18,10 @@ export interface ClientInfo {
   servers: string[];
   /** Servers it may use: null means every one, including servers added later. */
   allowed: string[] | null;
+  /** Servers the user was offered and left unticked: an allowed app asking for one of these is refused without asking. */
+  declined: string[];
+  /** Servers an allowed app has asked for that the user hasn't answered about yet (typically added after the app was allowed). */
+  asking: string[];
   /** Which app this is across restarts (its bundle or program), as opposed to `id`, which is one running copy. */
   identity: string;
   /** The decision is saved and applies again whenever the app comes back. */
@@ -215,7 +219,7 @@ export type Verdict = { status: "allowed" | "denied" | "pending"; client?: Clien
 
 const SAVED_PREFIX = "saved:";
 
-const copy = (c: ClientInfo): ClientInfo => ({ ...c, servers: [...c.servers], allowed: c.allowed ? [...c.allowed] : null });
+const copy = (c: ClientInfo): ClientInfo => ({ ...c, servers: [...c.servers], allowed: c.allowed ? [...c.allowed] : null, declined: [...c.declined], asking: [...c.asking] });
 
 const pidAlive = (pid: number): boolean => {
   try {
@@ -230,7 +234,8 @@ const pidAlive = (pid: number): boolean => {
  * Per-app approval for clients that connect over the local socket. One decision covers every connection the app
  * opens. By default it is remembered (in `apps.json`) and applies again whenever the same app comes back, until the
  * user changes or removes it; a decision made without "remember" lasts only until the app quits.
- * Events: "change" (list changed), "pending" (a new app is waiting for a decision), "decided" (the user answered; carries
+ * Events: "change" (list changed), "pending" (a new app is waiting for a decision), "asking" (an allowed app asked for a
+ * server it hasn't been answered about; carries the app and the server id), "decided" (the user answered; carries
  * the app, its previous status and whether it was remembered), "restored" (a remembered app came back and its saved
  * decision applied), "mismatch" (an app is at a remembered app's path but isn't signed the same, so it is asked about
  * again), "removed" (the user removed an app; carries the app and the ids of its running copies), "gone" (an app quit;
@@ -276,6 +281,8 @@ export class ClientGate extends EventEmitter {
           requests: 0,
           servers: [],
           allowed: a.allowed,
+          declined: a.declined ?? [],
+          asking: [],
           identity: a.identity,
           remembered: true,
           running: false,
@@ -295,7 +302,7 @@ export class ClientGate extends EventEmitter {
           if (!this.clients.has(r.key)) {
             const now = Date.now();
             const signer = r.identity.startsWith("app:") ? await (this.opts.signer ?? platformSigner)(r.path) : "";
-            const info: ClientInfo = { id: r.key, name: r.name, pid: r.pid, path: r.path, status: "pending", since: now, lastSeen: now, requests: 0, servers: [], allowed: null, identity: r.identity, remembered: false, running: true };
+            const info: ClientInfo = { id: r.key, name: r.name, pid: r.pid, path: r.path, status: "pending", since: now, lastSeen: now, requests: 0, servers: [], allowed: null, declined: [], asking: [], identity: r.identity, remembered: false, running: true };
             // Another connection from the same app may have registered it while the signature was being read.
             if (!this.clients.has(r.key)) {
               this.signers.set(r.key, signer);
@@ -303,6 +310,7 @@ export class ClientGate extends EventEmitter {
               if (saved && saved.signer === signer) {
                 info.status = saved.status;
                 info.allowed = saved.allowed;
+                info.declined = [...(saved.declined ?? [])];
                 info.remembered = true;
                 this.store?.touch(r.identity, { name: r.name, path: r.path, lastSeen: now });
                 this.clients.set(r.key, info);
@@ -334,7 +342,14 @@ export class ClientGate extends EventEmitter {
       c.servers.push(serverId);
       this.emit("change");
     }
-    if (c.status === "pending") {
+    // An allowed app limited to some servers is asked about a server it was never offered (one added later); an unticked one stays refused.
+    const unanswered = () => c.status === "allowed" && !!c.allowed && !c.allowed.includes(serverId) && !c.declined.includes(serverId);
+    if (unanswered() && !c.asking.includes(serverId)) {
+      c.asking.push(serverId);
+      this.emit("asking", copy(c), serverId);
+      this.emit("change");
+    }
+    if (c.status === "pending" || unanswered()) {
       await new Promise<void>((resolve) => {
         const list = this.waiters.get(id) ?? [];
         list.push(resolve);
@@ -342,6 +357,7 @@ export class ClientGate extends EventEmitter {
         setTimeout(resolve, this.opts.waitMs ?? 50_000).unref();
       });
     }
+    if (unanswered()) return { status: "pending", client: copy(c) };
     if (c.status === "allowed" && c.allowed && !c.allowed.includes(serverId)) {
       return { status: "denied", client: copy(c), reason: `${c.name} wasn't given access to this server. Change what it can use in MCP Hub → Settings.` };
     }
@@ -352,14 +368,16 @@ export class ClientGate extends EventEmitter {
    * `servers` limits what an allowed app may use; leave it out (or null) to allow every server.
    * `remember` (the default) saves the decision for the app itself, so it applies again after the app restarts;
    * without it the decision lasts until the app quits. An id from `list()` for an app that isn't running changes
-   * its saved decision.
+   * its saved decision. `offered` is every server the user was shown: the ones left out of `servers` are remembered as
+   * declined, so the app isn't asked about them again; servers added after this decision still are.
    */
-  decide(id: string, allow: boolean, servers: string[] | null = null, remember = true): boolean {
+  decide(id: string, allow: boolean, servers: string[] | null = null, remember = true, offered: string[] = []): boolean {
     const chosen = allow && servers ? [...new Set(servers)] : null;
+    const declined = chosen ? offered.filter((s) => !chosen.includes(s)) : [];
     if (id.startsWith(SAVED_PREFIX)) {
       const saved = this.store?.get(id.slice(SAVED_PREFIX.length));
       if (!saved) return false;
-      this.store!.upsert({ ...saved, status: allow ? "allowed" : "denied", allowed: chosen });
+      this.store!.upsert({ ...saved, status: allow ? "allowed" : "denied", allowed: chosen, declined });
       this.emit("decided", { ...this.list().find((c) => c.id === id)!, running: false }, saved.status, true);
       this.emit("change");
       return true;
@@ -373,12 +391,14 @@ export class ClientGate extends EventEmitter {
     for (const x of same) {
       x.status = allow ? "allowed" : "denied";
       x.allowed = chosen ? [...chosen] : null;
+      x.declined = [...declined];
+      x.asking = [];
       x.remembered = persist;
     }
     if (this.store) {
       if (persist) {
         const now = Date.now();
-        this.store.upsert({ identity: c.identity, name: c.name, path: c.path, status: c.status as "allowed" | "denied", allowed: c.allowed, signer: this.signers.get(c.id) ?? "", savedAt: now, lastSeen: now });
+        this.store.upsert({ identity: c.identity, name: c.name, path: c.path, status: c.status as "allowed" | "denied", allowed: c.allowed, declined: c.declined, signer: this.signers.get(c.id) ?? "", savedAt: now, lastSeen: now });
       } else {
         this.store.delete(c.identity);
       }

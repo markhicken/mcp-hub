@@ -34,7 +34,7 @@ describe("remembered apps", () => {
     first.on("pending", (c) => asked.push(c.name));
     const pending = first.authorize(21, "a");
     await new Promise((r) => setTimeout(r, 10));
-    first.decide(first.list()[0]!.id, true, ["a"]);
+    first.decide(first.list()[0]!.id, true, ["a"], true, ["a", "b"]);
     expect((await pending).status).toBe("allowed");
     expect(asked).toEqual(["Fake Client"]);
     first.close();

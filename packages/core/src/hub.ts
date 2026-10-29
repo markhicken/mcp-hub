@@ -176,6 +176,12 @@ export class Hub {
       this.history.record({ kind: "app", action: "asked", app: c.name });
       if (!opts.quiet) notify("MCP Hub", `${c.name} wants to use MCP Hub. Open MCP Hub to allow or deny it.`);
     });
+    // An allowed app asked for a server it was never offered, such as one added after it was allowed.
+    this.clients.on("asking", (c: { name: string }, serverId: string) => {
+      const server = this.manager.get(serverId)?.config.name ?? "a server";
+      this.history.record({ kind: "app", action: "asked-server", app: c.name, serverId, serverName: server });
+      if (!opts.quiet) notify("MCP Hub", `${c.name} wants to use ${server}. Open MCP Hub to allow or deny it.`);
+    });
     const serversOf = (allowed: string[] | null): string => {
       const names = (allowed ?? []).map((id) => this.manager.get(id)?.config.name).filter((n): n is string => !!n);
       return allowed === null ? "every server" : names.length ? names.join(", ") : "no servers";
@@ -1053,7 +1059,7 @@ export class Hub {
         const every = store.servers.every((s) => (body.servers as string[]).includes(s.id));
         servers = every ? null : (body.servers as string[]);
       }
-      if (!this.clients.decide(decodeURIComponent(r[1]!), body.allow, servers, body.remember !== false)) throw new HttpError(404, "That app isn't known to MCP Hub (it may have been removed)");
+      if (!this.clients.decide(decodeURIComponent(r[1]!), body.allow, servers, body.remember !== false, store.servers.map((s) => s.id))) throw new HttpError(404, "That app isn't known to MCP Hub (it may have been removed)");
       return json(res, 200, { ok: true });
     }
     // Forget an app completely. If it is running it has to be allowed again the next time it connects.

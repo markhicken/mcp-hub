@@ -81,7 +81,7 @@ export function snapshot(version: string): Snapshot {
     shim: null,
     socket: null,
     clients: [
-      { id: CLIENT.id, name: CLIENT.name, pid: 4242, path: "/Applications/Claude.app", status: "allowed", since: NOW - 3 * 3_600_000, lastSeen: NOW - 15 * MINUTE, requests: 30, servers: SERVERS.map((s) => s.id), allowed: null, identity: "claude", remembered: true, running: true },
+      { id: CLIENT.id, name: CLIENT.name, pid: 4242, path: "/Applications/Claude.app", status: "allowed", since: NOW - 3 * 3_600_000, lastSeen: NOW - 15 * MINUTE, requests: 30, servers: SERVERS.map((s) => s.id), allowed: null, asking: [], identity: "claude", remembered: true, running: true },
     ],
     servers: SERVERS.map(server),
     sources: [],

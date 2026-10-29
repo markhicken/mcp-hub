@@ -150,18 +150,54 @@ describe("approval gate", () => {
     await waitFor(() => g.list().length === 1);
     const id = g.list()[0]!.id;
     expect(g.list()[0]!.allowed).toBeNull();
-    g.decide(id, true, ["a", "b"]);
+    g.decide(id, true, ["a", "b"], true, ["a", "b", "c"]);
     expect((await first).status).toBe("allowed");
     expect((await g.authorize(52, "b")).status).toBe("allowed");
     const blocked = await g.authorize(53, "c");
     expect(blocked).toMatchObject({ status: "denied", reason: expect.stringContaining("wasn't given access") });
     // Changing the choice applies at once; allowing without a list means every server again.
-    g.decide(id, true, ["c"]);
+    g.decide(id, true, ["c"], true, ["a", "b", "c"]);
     expect((await g.authorize(54, "c")).status).toBe("allowed");
     expect((await g.authorize(55, "a")).status).toBe("denied");
     g.decide(id, true);
     expect(g.list()[0]!.allowed).toBeNull();
     expect((await g.authorize(56, "a")).status).toBe("allowed");
+    g.close();
+  });
+
+  it("asks again when an allowed app requests a server it was never offered", async () => {
+    const g = mk();
+    const asked: string[] = [];
+    g.on("asking", (_c, server: string) => asked.push(server));
+    const first = g.authorize(61, "a");
+    await waitFor(() => g.list().length === 1);
+    const id = g.list()[0]!.id;
+    g.decide(id, true, ["a"], true, ["a", "b"]);
+    await first;
+    // "b" was offered and left unticked: refused without asking. "new" wasn't offered: the user is asked.
+    expect((await g.authorize(62, "b")).status).toBe("denied");
+    expect(asked).toEqual([]);
+    const pending = g.authorize(63, "new");
+    await waitFor(() => g.list()[0]!.asking.length === 1);
+    expect(g.list()[0]).toMatchObject({ status: "allowed", asking: ["new"] });
+    expect(asked).toEqual(["new"]);
+    g.decide(id, true, ["a", "new"], true, ["a", "b", "new"]);
+    expect((await pending).status).toBe("allowed");
+    expect(g.list()[0]!.asking).toEqual([]);
+    expect(asked).toEqual(["new"]);
+    g.close();
+  });
+
+  it("reports pending while a new server is unanswered, and a refusal sticks", async () => {
+    const g = mk();
+    const first = g.authorize(71, "a");
+    await waitFor(() => g.list().length === 1);
+    const id = g.list()[0]!.id;
+    g.decide(id, true, ["a"], false, ["a"]);
+    await first;
+    expect((await g.authorize(72, "new")).status).toBe("pending");
+    g.decide(id, true, ["a"], false, ["a", "new"]);
+    expect((await g.authorize(73, "new")).status).toBe("denied");
     g.close();
   });
 

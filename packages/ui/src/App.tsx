@@ -71,7 +71,7 @@ export function App() {
     go("servers");
   };
   const showWelcome = snap && ((!snap.settings.onboarded && !introDismissed) || intro);
-  const askAbout = snap?.clients.find((c) => c.status === "pending" && !later.has(c.id));
+  const askAbout = snap?.clients.find((c) => !later.has(c.id) && (c.status === "pending" || (c.status === "allowed" && c.asking.some((id) => snap.servers.some((s) => s.id === id)))));
 
   return (
     <ToastProvider>
